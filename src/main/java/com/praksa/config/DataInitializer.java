@@ -17,13 +17,13 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * Test credentials (all passwords are "password123"):
  *
- *   STUDENT   student@test.com      index: 2024/001
- *   MENTOR    mentor@test.com
- *   MENTOR    mentor2@test.com      (second mentor for committee testing)
- *   MENTOR    mentor3@test.com      (third mentor for committee testing)
- *   ADMIN     admin@test.com
- *   COMMITTEE committee@test.com
- *   ARCHIVE   archive@test.com
+ *   STUDENT          student@test.com      index: 2024/001
+ *   MENTOR           mentor@test.com
+ *   MENTOR           mentor2@test.com      (second mentor for committee testing)
+ *   MENTOR           mentor3@test.com      (third mentor for committee testing)
+ *   STUDENT_SERVICE  service@test.com
+ *   COMMITTEE        committee@test.com
+ *   ARCHIVE          archive@test.com
  */
 @Slf4j
 @Component
@@ -49,7 +49,7 @@ public class DataInitializer implements ApplicationRunner {
         createUser("Test Mentor",     "mentor@test.com",    Role.MENTOR,    null);
         createUser("Test Mentor 2",   "mentor2@test.com",   Role.MENTOR,    null);
         createUser("Test Mentor 3",   "mentor3@test.com",   Role.MENTOR,    null);
-        createUser("Test Admin",      "admin@test.com",     Role.ADMIN,     null);
+        createUser("Test Service",    "service@test.com",   Role.STUDENT_SERVICE, null);
         createUser("Test Committee",  "committee@test.com", Role.COMMITTEE, null);
         createUser("Test Archive",    "archive@test.com",   Role.ARCHIVE,   null);
 
@@ -60,13 +60,13 @@ public class DataInitializer implements ApplicationRunner {
                 ╠══════════════════════════════════════════════════════════╣
                 ║  All passwords: password123                             ║
                 ║                                                          ║
-                ║  STUDENT   → student@test.com   (index: 2024/001)       ║
-                ║  MENTOR    → mentor@test.com                            ║
-                ║  MENTOR 2  → mentor2@test.com                           ║
-                ║  MENTOR 3  → mentor3@test.com                           ║
-                ║  ADMIN     → admin@test.com                             ║
-                ║  COMMITTEE → committee@test.com                         ║
-                ║  ARCHIVE   → archive@test.com                           ║
+                ║  STUDENT          → student@test.com  (index: 2024/001) ║
+                ║  MENTOR           → mentor@test.com                     ║
+                ║  MENTOR 2         → mentor2@test.com                    ║
+                ║  MENTOR 3         → mentor3@test.com                    ║
+                ║  STUDENT_SERVICE  → service@test.com                    ║
+                ║  COMMITTEE        → committee@test.com                  ║
+                ║  ARCHIVE          → archive@test.com                    ║
                 ╚══════════════════════════════════════════════════════════╝
                 """);
     }

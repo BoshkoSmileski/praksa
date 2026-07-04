@@ -41,6 +41,16 @@ public class JwtUtil {
         return getClaims(token).get("role", String.class);
     }
 
+    /** Optional claim — present only for tokens issued by an external provider. */
+    public String extractName(String token) {
+        return getClaims(token).get("name", String.class);
+    }
+
+    /** Optional claim — present only for students. */
+    public String extractIndexNumber(String token) {
+        return getClaims(token).get("index_number", String.class);
+    }
+
     public boolean isTokenValid(String token) {
         try {
             getClaims(token);

@@ -57,6 +57,33 @@ public class ThesisController {
     }
 
     @Operation(
+        summary = "Find archived thesis by registration number",
+        description = "Exact lookup by archive registration number (e.g. DT-2026-0001). " +
+                      "Useful for Archive users searching the official record."
+    )
+    @GetMapping("/by-registration-number/{registrationNumber}")
+    public ResponseEntity<ApiResponse<ThesisResponse>> findByRegistrationNumber(
+            @Parameter(description = "Archive registration number, e.g. DT-2026-0001")
+            @PathVariable String registrationNumber) {
+        return ResponseEntity.ok(ApiResponse.ok(thesisService.findByRegistrationNumber(registrationNumber)));
+    }
+
+    @Operation(
+        summary = "Download the thesis application PDF",
+        description = "Returns the generated application form as a PDF stream. " +
+                      "Accessible by student owner, assigned mentor, STUDENT_SERVICE, ARCHIVE, COMMITTEE."
+    )
+    @GetMapping("/{id}/application-pdf")
+    public ResponseEntity<org.springframework.core.io.Resource> downloadApplicationPdf(@PathVariable UUID id) {
+        org.springframework.core.io.Resource resource = thesisService.downloadApplicationPdf(id);
+        return ResponseEntity.ok()
+                .contentType(org.springframework.http.MediaType.APPLICATION_PDF)
+                .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"application-" + id + ".pdf\"")
+                .body(resource);
+    }
+
+    @Operation(
         summary = "Get status history",
         description = "Returns the full audit trail of status transitions for a thesis, oldest first."
     )
@@ -69,7 +96,7 @@ public class ThesisController {
     @Operation(
         summary = "Decide eligibility (Step 1 result)",
         description = "Admin approves or rejects the eligibility check. " +
-                      "Approved → TOPIC_SELECTION. Rejected → ELIGIBILITY_REJECTED. Requires role: ADMIN."
+                      "Approved → TOPIC_SELECTION. Rejected → ELIGIBILITY_REJECTED. Requires role: STUDENT_SERVICE."
     )
     @PatchMapping("/{id}/eligibility")
     public ResponseEntity<ApiResponse<ThesisResponse>> decideEligibility(
@@ -93,8 +120,8 @@ public class ThesisController {
 
     @Operation(
         summary = "Decide mentor request (Step 2 result)",
-        description = "Mentor accepts or rejects the topic. " +
-                      "Accepted → APPLICATION_SUBMITTED. Rejected → MENTOR_REJECTED_TOPIC (mentor cleared). " +
+        description = "Mentor decides: ACCEPT → APPLICATION_SUBMITTED · REJECT → MENTOR_REJECTED_TOPIC (mentor cleared) · " +
+                      "REQUEST_CHANGES → MENTOR_REQUESTED_CHANGES (mentor stays, mentorComment is required). " +
                       "Requires role: MENTOR and must be the assigned mentor."
     )
     @PatchMapping("/{id}/mentor-decision")
@@ -105,9 +132,22 @@ public class ThesisController {
     }
 
     @Operation(
-        summary = "Submit formal application (Step 3)",
-        description = "Student submits the formal application form → ADMINISTRATIVE_VALIDATION. " +
+        summary = "Revise proposal (Step 2 revision loop)",
+        description = "After mentor requests changes, student updates title (and optionally description) and resubmits to the SAME mentor. " +
+                      "Status returns to PENDING_MENTOR_APPROVAL. Revision count is preserved on the thesis. " +
                       "Requires role: STUDENT and thesis ownership."
+    )
+    @PatchMapping("/{id}/revise-proposal")
+    public ResponseEntity<ApiResponse<ThesisResponse>> reviseProposal(
+            @PathVariable UUID id,
+            @Valid @RequestBody ReviseProposalRequest request) {
+        return ResponseEntity.ok(ApiResponse.ok(thesisService.reviseProposal(id, request)));
+    }
+
+    @Operation(
+        summary = "Submit formal application (Step 3)",
+        description = "Student submits (or resubmits after rejection) the formal application. " +
+                      "Always moves status to PENDING_ARCHIVE_VALIDATION. Requires role: STUDENT and thesis ownership."
     )
     @PatchMapping("/{id}/submit-application")
     public ResponseEntity<ApiResponse<ThesisResponse>> submitApplication(@PathVariable UUID id) {
@@ -115,12 +155,29 @@ public class ThesisController {
     }
 
     @Operation(
-        summary = "Validate application (Step 4)",
-        description = "Admin validates the documentation → IN_PROGRESS. Requires role: ADMIN."
+        summary = "Archive validates application (Step 4a)",
+        description = "Archive approves or rejects the documentation. " +
+                      "Approve → PENDING_SERVICE_VALIDATION. Reject (with mandatory comment) → APPLICATION_REJECTED_BY_ARCHIVE. " +
+                      "Requires role: ARCHIVE."
     )
-    @PatchMapping("/{id}/validate")
-    public ResponseEntity<ApiResponse<ThesisResponse>> validateApplication(@PathVariable UUID id) {
-        return ResponseEntity.ok(ApiResponse.ok(thesisService.validateApplication(id)));
+    @PatchMapping("/{id}/archive-validate")
+    public ResponseEntity<ApiResponse<ThesisResponse>> archiveValidate(
+            @PathVariable UUID id,
+            @Valid @RequestBody ValidationDecisionRequest request) {
+        return ResponseEntity.ok(ApiResponse.ok(thesisService.archiveValidate(id, request)));
+    }
+
+    @Operation(
+        summary = "Student Service validates application (Step 4b)",
+        description = "Student Service approves or rejects the documentation. " +
+                      "Approve → IN_PROGRESS. Reject (with mandatory comment) → APPLICATION_REJECTED_BY_SERVICE. " +
+                      "Requires role: STUDENT_SERVICE."
+    )
+    @PatchMapping("/{id}/service-validate")
+    public ResponseEntity<ApiResponse<ThesisResponse>> serviceValidate(
+            @PathVariable UUID id,
+            @Valid @RequestBody ValidationDecisionRequest request) {
+        return ResponseEntity.ok(ApiResponse.ok(thesisService.serviceValidate(id, request)));
     }
 
     @Operation(

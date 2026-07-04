@@ -281,7 +281,7 @@ public class ThesisVersionServiceImpl implements ThesisVersionService {
      * Student sees their own, mentor sees assigned, admin/archive/committee see all.
      */
     private void checkReadAccess(Thesis thesis, User user) {
-        if (user.getRole() == Role.ADMIN
+        if (user.getRole() == Role.STUDENT_SERVICE
                 || user.getRole() == Role.ARCHIVE
                 || user.getRole() == Role.COMMITTEE) {
             return;

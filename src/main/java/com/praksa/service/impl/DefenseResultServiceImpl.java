@@ -22,6 +22,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 @Service
@@ -41,7 +42,7 @@ public class DefenseResultServiceImpl implements DefenseResultService {
 
         // Only committee members or admin can record a grade.
         // We check role here; a stricter check would verify they're on this thesis's committee.
-        if (recorder.getRole() != Role.COMMITTEE && recorder.getRole() != Role.ADMIN) {
+        if (recorder.getRole() != Role.COMMITTEE && recorder.getRole() != Role.STUDENT_SERVICE) {
             throw new UnauthorizedException("Only committee members can record a defense result");
         }
 
@@ -75,12 +76,32 @@ public class DefenseResultServiceImpl implements DefenseResultService {
 
         resultRepository.save(result);
 
+        // ─── Assign archive metadata ──────────────────────────────────────
+        // Done BEFORE the status transition so the saved thesis has all fields populated.
+        // Once set, the registration number is immutable (no update endpoint exposes it).
+        OffsetDateTime now = OffsetDateTime.now();
+        thesis.setArchiveRegistrationNumber(generateRegistrationNumber(now.getYear()));
+        thesis.setArchiveDate(now);
+        thesis.setArchivedBy(recorder);
+        // archiveNotes intentionally left null — can be set later via a future endpoint.
+
         // Archive the thesis.
         // This is the critical state change: once ARCHIVED, this thesis no longer
         // counts toward the mentor's active thesis limit (our query filters by != ARCHIVED).
         transitionStatus(thesis, ThesisStatus.ARCHIVED, recorder);
 
         return DefenseResultResponse.from(result);
+    }
+
+    /**
+     * Generates a registration number in the form DT-YYYY-NNNN.
+     * The sequence resets per calendar year. Uniqueness is also enforced at the DB level —
+     * if two concurrent archivings race for the same number, the loser's transaction rolls back.
+     */
+    private String generateRegistrationNumber(int year) {
+        String prefix = "DT-" + year + "-";
+        long count = thesisRepository.countByArchiveRegistrationNumberStartingWith(prefix);
+        return String.format("%s%04d", prefix, count + 1);
     }
 
     @Override

@@ -115,7 +115,7 @@ public class CommitteeServiceImpl implements CommitteeService {
     @Transactional
     public List<CommitteeMemberResponse> approveCommittee(UUID thesisId) {
         User admin = securityUtils.getCurrentUser();
-        requireRole(admin, Role.ADMIN);
+        requireRole(admin, Role.STUDENT_SERVICE);
 
         Thesis thesis = findThesis(thesisId);
         requireStatus(thesis, ThesisStatus.MENTOR_APPROVED);
@@ -136,7 +136,9 @@ public class CommitteeServiceImpl implements CommitteeService {
             committeeRepository.save(m);
         }
 
-        // Advance thesis to COMMITTEE_REVIEW
+        // Advance thesis to COMMITTEE_REVIEW and stamp the start time —
+        // the scheduled job uses this to auto-advance after 5 business days.
+        thesis.setCommitteeReviewStartedAt(OffsetDateTime.now());
         transitionStatus(thesis, ThesisStatus.COMMITTEE_REVIEW, admin);
 
         return members.stream().map(CommitteeMemberResponse::from).toList();
@@ -185,7 +187,7 @@ public class CommitteeServiceImpl implements CommitteeService {
     @Transactional
     public void acceptCommitteeReview(UUID thesisId) {
         User admin = securityUtils.getCurrentUser();
-        requireRole(admin, Role.ADMIN);
+        requireRole(admin, Role.STUDENT_SERVICE);
 
         Thesis thesis = findThesis(thesisId);
         requireStatus(thesis, ThesisStatus.COMMITTEE_REVIEW);

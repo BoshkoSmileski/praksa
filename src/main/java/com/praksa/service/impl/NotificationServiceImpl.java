@@ -5,7 +5,9 @@ import com.praksa.model.Notification;
 import com.praksa.model.Thesis;
 import com.praksa.model.User;
 import com.praksa.model.enums.NotificationType;
+import com.praksa.model.enums.Role;
 import com.praksa.repository.NotificationRepository;
+import com.praksa.repository.UserRepository;
 import com.praksa.security.SecurityUtils;
 import com.praksa.service.EmailService;
 import com.praksa.service.NotificationService;
@@ -23,6 +25,7 @@ import java.util.UUID;
 public class NotificationServiceImpl implements NotificationService {
 
     private final NotificationRepository notificationRepository;
+    private final UserRepository userRepository;
     private final EmailService emailService;
     private final SecurityUtils securityUtils;
 
@@ -61,6 +64,19 @@ public class NotificationServiceImpl implements NotificationService {
 
         log.debug("Notification created: type={}, recipient={}, thesis={}",
                 type, recipientEmail, thesis != null ? thesis.getId() : "none");
+    }
+
+    @Override
+    @Transactional
+    public void notifyRole(Role role, Thesis thesis, NotificationType type) {
+        // Fan out to every user with this role.
+        // For a small team (1-2 archive users, 1-2 service users) this is fine.
+        // For thousands of users we'd switch to a single "queue" notification
+        // visible via a dashboard endpoint.
+        List<User> recipients = userRepository.findByRole(role);
+        for (User recipient : recipients) {
+            notify(recipient, thesis, type);
+        }
     }
 
     @Override

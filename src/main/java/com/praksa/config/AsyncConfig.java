@@ -3,12 +3,14 @@ package com.praksa.config;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.concurrent.Executor;
 
 @Configuration
-@EnableAsync  // This is what activates @Async throughout the application
+@EnableAsync       // activates @Async throughout the application
+@EnableScheduling  // activates @Scheduled on any bean (used by ScheduledTasksService)
 public class AsyncConfig {
 
     /**

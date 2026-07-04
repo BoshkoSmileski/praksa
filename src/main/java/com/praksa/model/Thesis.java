@@ -39,9 +39,42 @@ public class Thesis {
     @Column(name = "mentor_comment", columnDefinition = "text")
     private String mentorComment;
 
+    // Last note left by Archive during validation (approval note or rejection reason)
+    @Column(name = "archive_comment", columnDefinition = "text")
+    private String archiveComment;
+
+    // Last note left by Student Service during validation
+    @Column(name = "service_comment", columnDefinition = "text")
+    private String serviceComment;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private ThesisStatus status;
+
+    /**
+     * How many times the mentor has asked for proposal revisions on this thesis.
+     * Incremented once each time mentor decides REQUEST_CHANGES.
+     * Never decremented — preserves the audit signal.
+     */
+    @Builder.Default
+    @Column(name = "revision_count", nullable = false)
+    private int revisionCount = 0;
+
+    /**
+     * Stamped when the thesis transitions to COMMITTEE_REVIEW.
+     * Used by the auto-advance scheduled job: after 5 business days the system
+     * advances the thesis to COMMITTEE_ACCEPTED if the committee hasn't acted.
+     */
+    @Column(name = "committee_review_started_at")
+    private OffsetDateTime committeeReviewStartedAt;
+
+    /**
+     * Path to the generated application form PDF on disk.
+     * Created when the student calls submitApplication; never overwritten on resubmit.
+     * Downloadable by all parties involved in the validation chain.
+     */
+    @Column(name = "application_pdf_path", length = 1024)
+    private String applicationPdfPath;
 
     @Column(name = "submission_deadline")
     private OffsetDateTime submissionDeadline;
@@ -51,6 +84,23 @@ public class Thesis {
 
     @Column(name = "updated_at")
     private OffsetDateTime updatedAt;
+
+    // ---------- Archive metadata (populated when the thesis becomes ARCHIVED) ----------
+    // All four fields are set in a single place: DefenseResultServiceImpl.recordResult().
+    // Once assigned, the registration number is immutable.
+
+    @Column(name = "archive_registration_number", unique = true, length = 50)
+    private String archiveRegistrationNumber;
+
+    @Column(name = "archive_date")
+    private OffsetDateTime archiveDate;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "archived_by")
+    private User archivedBy;
+
+    @Column(name = "archive_notes", columnDefinition = "text")
+    private String archiveNotes;
 
     @PrePersist
     public void prePersist() {

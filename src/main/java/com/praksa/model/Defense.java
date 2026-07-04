@@ -44,6 +44,13 @@ public class Defense {
     @Column(name = "created_at")
     private OffsetDateTime createdAt;
 
+    /**
+     * Stamped when the defense reminder email has been sent (24h before scheduledAt).
+     * NULL means no reminder has gone out yet. Prevents duplicate reminders.
+     */
+    @Column(name = "reminder_sent_at")
+    private OffsetDateTime reminderSentAt;
+
     @PrePersist
     public void prePersist() {
         if (createdAt == null) createdAt = OffsetDateTime.now();

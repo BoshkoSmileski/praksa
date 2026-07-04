@@ -8,11 +8,15 @@ public enum ThesisStatus {
     // Step 2: Topic and mentor selection
     TOPIC_SELECTION,
     PENDING_MENTOR_APPROVAL,
+    MENTOR_REQUESTED_CHANGES,
     MENTOR_REJECTED_TOPIC,
 
-    // Step 3-4: Application and admin validation
+    // Step 3-4: Application submission → archive validation → student service validation
     APPLICATION_SUBMITTED,
-    ADMINISTRATIVE_VALIDATION,
+    PENDING_ARCHIVE_VALIDATION,
+    APPLICATION_REJECTED_BY_ARCHIVE,
+    PENDING_SERVICE_VALIDATION,
+    APPLICATION_REJECTED_BY_SERVICE,
 
     // Step 5-6: Working and final submission
     IN_PROGRESS,

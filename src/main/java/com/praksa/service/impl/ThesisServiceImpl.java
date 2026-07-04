@@ -7,6 +7,7 @@ import com.praksa.exception.UnauthorizedException;
 import com.praksa.model.Thesis;
 import com.praksa.model.ThesisStatusHistory;
 import com.praksa.model.User;
+import com.praksa.model.enums.MentorDecision;
 import com.praksa.model.enums.NotificationType;
 import com.praksa.model.enums.Role;
 import com.praksa.model.enums.ThesisStatus;
@@ -14,6 +15,7 @@ import com.praksa.repository.ThesisRepository;
 import com.praksa.repository.ThesisStatusHistoryRepository;
 import com.praksa.repository.UserRepository;
 import com.praksa.security.SecurityUtils;
+import com.praksa.service.ApplicationPdfService;
 import com.praksa.service.NotificationService;
 import com.praksa.service.ThesisService;
 import lombok.RequiredArgsConstructor;
@@ -32,6 +34,7 @@ public class ThesisServiceImpl implements ThesisService {
     private final UserRepository userRepository;
     private final SecurityUtils securityUtils;
     private final NotificationService notificationService;
+    private final ApplicationPdfService applicationPdfService;
 
     // -------------------------------------------------------------------------
     // STEP 1: Student requests eligibility check
@@ -76,7 +79,7 @@ public class ThesisServiceImpl implements ThesisService {
     @Transactional
     public ThesisResponse decideEligibility(UUID thesisId, EligibilityDecisionRequest request) {
         User admin = securityUtils.getCurrentUser();
-        requireRole(admin, Role.ADMIN);
+        requireRole(admin, Role.STUDENT_SERVICE);
 
         Thesis thesis = findThesis(thesisId);
         requireStatus(thesis, ThesisStatus.PENDING_ELIGIBILITY_CHECK);
@@ -140,7 +143,7 @@ public class ThesisServiceImpl implements ThesisService {
     }
 
     // -------------------------------------------------------------------------
-    // STEP 2 result: Mentor accepts or rejects the topic
+    // STEP 2 result: Mentor accepts, rejects, or requests changes
     // -------------------------------------------------------------------------
 
     @Override
@@ -157,32 +160,85 @@ public class ThesisServiceImpl implements ThesisService {
             throw new UnauthorizedException("You are not the assigned mentor for this thesis");
         }
 
-        if (request.getMentorComment() != null) {
-            thesis.setMentorComment(request.getMentorComment());
+        // Comment is REQUIRED when requesting changes (student needs to know what to change)
+        if (request.getDecision() == MentorDecision.REQUEST_CHANGES
+                && (request.getMentorComment() == null || request.getMentorComment().isBlank())) {
+            throw new BadRequestException("A comment is required when requesting changes");
         }
 
-        ThesisStatus newStatus = request.getAccepted()
-                ? ThesisStatus.APPLICATION_SUBMITTED
-                : ThesisStatus.MENTOR_REJECTED_TOPIC;
-
-        // If rejected, clear the mentor so student can pick another
-        if (!request.getAccepted()) {
-            thesis.setMentor(null);
+        if (request.getMentorComment() != null && !request.getMentorComment().isBlank()) {
+            thesis.setMentorComment(request.getMentorComment().trim());
         }
 
-        transitionStatus(thesis, newStatus, mentor);
-
-        // Notify the student of the mentor's decision
-        NotificationType decisionType = request.getAccepted()
-                ? NotificationType.MENTOR_ACCEPTED_TOPIC
-                : NotificationType.MENTOR_REJECTED_TOPIC;
-        notificationService.notify(thesis.getStudent(), thesis, decisionType);
+        switch (request.getDecision()) {
+            case ACCEPT -> {
+                transitionStatus(thesis, ThesisStatus.APPLICATION_SUBMITTED, mentor);
+                notificationService.notify(thesis.getStudent(), thesis, NotificationType.MENTOR_ACCEPTED_TOPIC);
+            }
+            case REJECT -> {
+                // Clear the mentor so the slot is freed; student picks another
+                thesis.setMentor(null);
+                transitionStatus(thesis, ThesisStatus.MENTOR_REJECTED_TOPIC, mentor);
+                notificationService.notify(thesis.getStudent(), thesis, NotificationType.MENTOR_REJECTED_TOPIC);
+            }
+            case REQUEST_CHANGES -> {
+                // Mentor stays assigned; mentor's slot remains consumed (counts toward 10-active)
+                // Increment revision counter so the student / list views can show the cycle count
+                thesis.setRevisionCount(thesis.getRevisionCount() + 1);
+                transitionStatus(thesis, ThesisStatus.MENTOR_REQUESTED_CHANGES, mentor);
+                notificationService.notify(thesis.getStudent(), thesis, NotificationType.MENTOR_REQUESTED_CHANGES);
+            }
+        }
 
         return ThesisResponse.from(thesis);
     }
 
     // -------------------------------------------------------------------------
-    // STEP 3: Student submits the formal application
+    // STEP 2 (revision loop): Student revises title/idea and resubmits
+    //
+    // Same thesis row reused. Mentor stays assigned. Eligibility/archive/service
+    // validations are NOT replayed. The status loop is bounded only by the
+    // student giving up (and resetting to MENTOR_REJECTED_TOPIC manually if needed —
+    // but that's not part of this flow).
+    // -------------------------------------------------------------------------
+
+    @Override
+    @Transactional
+    public ThesisResponse reviseProposal(UUID thesisId, ReviseProposalRequest request) {
+        User student = securityUtils.getCurrentUser();
+        requireRole(student, Role.STUDENT);
+
+        Thesis thesis = findThesis(thesisId);
+        requireOwner(thesis, student);
+        requireStatus(thesis, ThesisStatus.MENTOR_REQUESTED_CHANGES);
+
+        // Sanity check — mentor should still be assigned (request-changes never clears it)
+        if (thesis.getMentor() == null) {
+            throw new BadRequestException("Mentor is no longer assigned; cannot revise to same mentor");
+        }
+
+        thesis.setTitle(request.getTitle().trim());
+        if (request.getStudentComment() != null) {
+            thesis.setStudentComment(request.getStudentComment().trim());
+        }
+
+        transitionStatus(thesis, ThesisStatus.PENDING_MENTOR_APPROVAL, student);
+
+        // Tell the mentor a new revision is waiting
+        notificationService.notify(thesis.getMentor(), thesis, NotificationType.STUDENT_RESUBMITTED_PROPOSAL);
+
+        return ThesisResponse.from(thesis);
+    }
+
+    // -------------------------------------------------------------------------
+    // STEP 3: Student submits (or resubmits) the formal application
+    //
+    // Allowed source statuses:
+    //   APPLICATION_SUBMITTED              → fresh submission
+    //   APPLICATION_REJECTED_BY_ARCHIVE    → resubmit after archive rejection
+    //   APPLICATION_REJECTED_BY_SERVICE    → resubmit after service rejection
+    // In all cases the next status is PENDING_ARCHIVE_VALIDATION (always restart
+    // at archive — keeps the invariant "archive always sees it first").
     // -------------------------------------------------------------------------
 
     @Override
@@ -193,30 +249,91 @@ public class ThesisServiceImpl implements ThesisService {
 
         Thesis thesis = findThesis(thesisId);
         requireOwner(thesis, student);
-        requireStatus(thesis, ThesisStatus.APPLICATION_SUBMITTED);
 
-        transitionStatus(thesis, ThesisStatus.ADMINISTRATIVE_VALIDATION, student);
+        ThesisStatus s = thesis.getStatus();
+        if (s != ThesisStatus.APPLICATION_SUBMITTED
+                && s != ThesisStatus.APPLICATION_REJECTED_BY_ARCHIVE
+                && s != ThesisStatus.APPLICATION_REJECTED_BY_SERVICE) {
+            throw new BadRequestException(
+                    "Application can only be submitted from APPLICATION_SUBMITTED or a rejection status. Current: " + s);
+        }
+
+        // Generate the application PDF artifact — archive/service review this
+        String pdfPath = applicationPdfService.generate(thesis);
+        thesis.setApplicationPdfPath(pdfPath);
+
+        transitionStatus(thesis, ThesisStatus.PENDING_ARCHIVE_VALIDATION, student);
+
+        // Tell all archive users a new application is waiting
+        notificationService.notifyRole(Role.ARCHIVE, thesis, NotificationType.APPLICATION_PENDING_ARCHIVE);
 
         return ThesisResponse.from(thesis);
     }
 
     // -------------------------------------------------------------------------
-    // STEP 4: Admin validates documentation
+    // STEP 4a: Archive validates documentation
     // -------------------------------------------------------------------------
 
     @Override
     @Transactional
-    public ThesisResponse validateApplication(UUID thesisId) {
-        User admin = securityUtils.getCurrentUser();
-        requireRole(admin, Role.ADMIN);
+    public ThesisResponse archiveValidate(UUID thesisId, ValidationDecisionRequest request) {
+        User archiveUser = securityUtils.getCurrentUser();
+        requireRole(archiveUser, Role.ARCHIVE);
 
         Thesis thesis = findThesis(thesisId);
-        requireStatus(thesis, ThesisStatus.ADMINISTRATIVE_VALIDATION);
+        requireStatus(thesis, ThesisStatus.PENDING_ARCHIVE_VALIDATION);
 
-        transitionStatus(thesis, ThesisStatus.IN_PROGRESS, admin);
+        // On rejection a comment is mandatory (so student knows what to fix)
+        if (!request.getApproved() && (request.getComment() == null || request.getComment().isBlank())) {
+            throw new BadRequestException("A rejection comment is required");
+        }
 
-        // Notify the student their application passed validation
-        notificationService.notify(thesis.getStudent(), thesis, NotificationType.APPLICATION_VALIDATED);
+        // Persist the note (either an approval note or a rejection reason)
+        if (request.getComment() != null && !request.getComment().isBlank()) {
+            thesis.setArchiveComment(request.getComment().trim());
+        }
+
+        if (request.getApproved()) {
+            transitionStatus(thesis, ThesisStatus.PENDING_SERVICE_VALIDATION, archiveUser);
+            // Tell service users it's their turn
+            notificationService.notifyRole(Role.STUDENT_SERVICE, thesis, NotificationType.APPLICATION_PENDING_SERVICE);
+        } else {
+            transitionStatus(thesis, ThesisStatus.APPLICATION_REJECTED_BY_ARCHIVE, archiveUser);
+            // Tell student about the rejection
+            notificationService.notify(thesis.getStudent(), thesis, NotificationType.APPLICATION_REJECTED_BY_ARCHIVE);
+        }
+
+        return ThesisResponse.from(thesis);
+    }
+
+    // -------------------------------------------------------------------------
+    // STEP 4b: Student Service validates documentation
+    // -------------------------------------------------------------------------
+
+    @Override
+    @Transactional
+    public ThesisResponse serviceValidate(UUID thesisId, ValidationDecisionRequest request) {
+        User serviceUser = securityUtils.getCurrentUser();
+        requireRole(serviceUser, Role.STUDENT_SERVICE);
+
+        Thesis thesis = findThesis(thesisId);
+        requireStatus(thesis, ThesisStatus.PENDING_SERVICE_VALIDATION);
+
+        if (!request.getApproved() && (request.getComment() == null || request.getComment().isBlank())) {
+            throw new BadRequestException("A rejection comment is required");
+        }
+
+        if (request.getComment() != null && !request.getComment().isBlank()) {
+            thesis.setServiceComment(request.getComment().trim());
+        }
+
+        if (request.getApproved()) {
+            transitionStatus(thesis, ThesisStatus.IN_PROGRESS, serviceUser);
+            notificationService.notify(thesis.getStudent(), thesis, NotificationType.APPLICATION_VALIDATED);
+        } else {
+            transitionStatus(thesis, ThesisStatus.APPLICATION_REJECTED_BY_SERVICE, serviceUser);
+            notificationService.notify(thesis.getStudent(), thesis, NotificationType.APPLICATION_REJECTED_BY_SERVICE);
+        }
 
         return ThesisResponse.from(thesis);
     }
@@ -271,8 +388,14 @@ public class ThesisServiceImpl implements ThesisService {
             theses = thesisRepository.findByStudent(user);
         } else if (user.getRole() == Role.MENTOR) {
             theses = thesisRepository.findByMentor(user);
+        } else if (user.getRole() == Role.ARCHIVE) {
+            // Archive sees only theses in their queue (awaiting validation) + already archived
+            theses = thesisRepository.findAll().stream()
+                    .filter(t -> t.getStatus() == ThesisStatus.PENDING_ARCHIVE_VALIDATION
+                              || t.getStatus() == ThesisStatus.ARCHIVED)
+                    .toList();
         } else {
-            // Admins and other roles see all theses
+            // Student Service and Committee see all theses
             theses = thesisRepository.findAll();
         }
 
@@ -282,6 +405,45 @@ public class ThesisServiceImpl implements ThesisService {
         return theses.stream()
                 .map(ThesisResponse::from)
                 .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public org.springframework.core.io.Resource downloadApplicationPdf(UUID thesisId) {
+        Thesis thesis = findThesis(thesisId);
+        if (thesis.getApplicationPdfPath() == null) {
+            throw new ResourceNotFoundException("No application PDF generated yet for this thesis");
+        }
+        // Access: student owner, assigned mentor, any STUDENT_SERVICE/ARCHIVE/COMMITTEE user
+        User user = securityUtils.getCurrentUser();
+        boolean allowed =
+                (user.getRole() == Role.STUDENT && thesis.getStudent().getId().equals(user.getId())) ||
+                (user.getRole() == Role.MENTOR  && thesis.getMentor() != null && thesis.getMentor().getId().equals(user.getId())) ||
+                (user.getRole() == Role.STUDENT_SERVICE) ||
+                (user.getRole() == Role.ARCHIVE) ||
+                (user.getRole() == Role.COMMITTEE);
+        if (!allowed) {
+            throw new UnauthorizedException("You do not have access to this application PDF");
+        }
+        try {
+            java.nio.file.Path p = java.nio.file.Paths.get(thesis.getApplicationPdfPath()).toAbsolutePath().normalize();
+            org.springframework.core.io.UrlResource r = new org.springframework.core.io.UrlResource(p.toUri());
+            if (!r.exists() || !r.isReadable()) {
+                throw new ResourceNotFoundException("Application PDF file is missing on disk");
+            }
+            return r;
+        } catch (java.net.MalformedURLException e) {
+            throw new RuntimeException("Malformed application PDF path", e);
+        }
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ThesisResponse findByRegistrationNumber(String registrationNumber) {
+        Thesis thesis = thesisRepository.findByArchiveRegistrationNumber(registrationNumber.trim())
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "No thesis found with registration number: " + registrationNumber));
+        return ThesisResponse.from(thesis);
     }
 
     @Override

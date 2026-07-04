@@ -3,7 +3,7 @@ package com.praksa.model.enums;
 public enum Role {
     STUDENT,
     MENTOR,
-    ADMIN,
+    STUDENT_SERVICE,
     COMMITTEE,
     ARCHIVE
 }
