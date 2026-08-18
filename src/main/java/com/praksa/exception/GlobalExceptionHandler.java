@@ -3,6 +3,7 @@ package com.praksa.exception;
 import com.praksa.dto.ApiResponse;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -45,6 +46,23 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleUnauthorized(UnauthorizedException ex) {
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
                 .body(ApiResponse.error(ex.getMessage()));
+    }
+
+    // Handles Spring Security authentication failures raised by
+    // AuthenticationManager.authenticate() during login (e.g. BadCredentialsException
+    // for a wrong password OR an unknown email — DaoAuthenticationProvider hides the
+    // difference by default, so both surface identically here). Without this, the
+    // exception fell through to the generic handler below and produced HTTP 500.
+    //
+    // We return 403 FORBIDDEN to match this application's established auth-failure
+    // contract (Spring Security's filter chain already returns 403 for unauthenticated
+    // access to protected endpoints — see AuthIntegrationTest.protectedEndpoint_noToken).
+    // A single generic message is used deliberately: it must NOT reveal whether the
+    // email exists, preventing user enumeration.
+    @ExceptionHandler(AuthenticationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAuthentication(AuthenticationException ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiResponse.error("Invalid email or password"));
     }
 
     // Catches anything else unexpected

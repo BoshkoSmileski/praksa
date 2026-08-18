@@ -11,6 +11,7 @@ import com.praksa.model.Thesis;
 import com.praksa.model.ThesisStatusHistory;
 import com.praksa.model.User;
 import com.praksa.model.enums.MemberRole;
+import com.praksa.model.enums.NotificationType;
 import com.praksa.model.enums.Role;
 import com.praksa.model.enums.ThesisStatus;
 import com.praksa.repository.CommitteeMemberRepository;
@@ -18,7 +19,9 @@ import com.praksa.repository.ThesisRepository;
 import com.praksa.repository.ThesisStatusHistoryRepository;
 import com.praksa.repository.UserRepository;
 import com.praksa.security.SecurityUtils;
+import com.praksa.security.ThesisReadAccessPolicy;
 import com.praksa.service.CommitteeService;
+import com.praksa.service.NotificationService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,6 +40,8 @@ public class CommitteeServiceImpl implements CommitteeService {
     private final ThesisStatusHistoryRepository statusHistoryRepository;
     private final UserRepository userRepository;
     private final SecurityUtils securityUtils;
+    private final NotificationService notificationService;
+    private final ThesisReadAccessPolicy thesisReadAccessPolicy;
 
     // -------------------------------------------------------------------------
     // STEP 8a: Mentor proposes the committee
@@ -141,6 +146,18 @@ public class CommitteeServiceImpl implements CommitteeService {
         thesis.setCommitteeReviewStartedAt(OffsetDateTime.now());
         transitionStatus(thesis, ThesisStatus.COMMITTEE_REVIEW, admin);
 
+        // ─── Notifications (only after the committee is officially formed) ───
+        // COMMITTEE_FORMED goes to every seated professor. The thesis mentor holds a
+        // MENTOR_MEMBER seat, so iterating `members` already covers the mentor exactly
+        // once — no separate mentor notify needed (avoids a duplicate).
+        for (CommitteeMember m : members) {
+            notificationService.notify(m.getProfessor(), thesis, NotificationType.COMMITTEE_FORMED);
+        }
+        // The student is informed with a student-appropriate custom message (the default
+        // COMMITTEE_FORMED body is written for the seated members).
+        notificationService.notify(thesis.getStudent(), thesis, NotificationType.COMMITTEE_FORMED,
+                "Your thesis defense committee has been formed and the review period has started.");
+
         return members.stream().map(CommitteeMemberResponse::from).toList();
     }
 
@@ -197,6 +214,18 @@ public class CommitteeServiceImpl implements CommitteeService {
         // avoids an intermediate status that has no UI actions attached to it.
         transitionStatus(thesis, ThesisStatus.COMMITTEE_ACCEPTED, admin);
         transitionStatus(thesis, ThesisStatus.PENDING_DEFENSE_CHECK, admin);
+
+        // ─── Notifications (only after the review is accepted) ───────────────
+        // COMMITTEE_REVIEW_ACCEPTED tells everyone the review is complete and defense
+        // scheduling can proceed. The mentor holds a committee seat, so iterating the
+        // committee already notifies the mentor exactly once (no duplicate).
+        // NOTE: the scheduled auto-accept path (ScheduledTasksService) intentionally uses
+        // the distinct COMMITTEE_REVIEW_AUTO_ADVANCED type instead, because that audience
+        // needs to know the acceptance was automatic (5 business days of silence).
+        notificationService.notify(thesis.getStudent(), thesis, NotificationType.COMMITTEE_REVIEW_ACCEPTED);
+        for (CommitteeMember m : committeeRepository.findByThesis(thesis)) {
+            notificationService.notify(m.getProfessor(), thesis, NotificationType.COMMITTEE_REVIEW_ACCEPTED);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -207,6 +236,9 @@ public class CommitteeServiceImpl implements CommitteeService {
     @Transactional(readOnly = true)
     public List<CommitteeMemberResponse> getCommittee(UUID thesisId) {
         Thesis thesis = findThesis(thesisId);
+        // Authorize against the underlying thesis: an unrelated COMMITTEE (or any other) user
+        // must not be able to inspect another thesis's committee just by knowing its UUID.
+        thesisReadAccessPolicy.requireReadAccess(thesis, securityUtils.getCurrentUser());
         return committeeRepository.findByThesis(thesis)
                 .stream()
                 .map(CommitteeMemberResponse::from)

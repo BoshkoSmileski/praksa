@@ -30,22 +30,31 @@ public class AuthServiceImpl implements AuthService {
             throw new BadRequestException("Email already in use");
         }
 
-        // Students must have an index number
-        if (request.getRole() == Role.STUDENT) {
-            if (request.getIndexNumber() == null || request.getIndexNumber().isBlank()) {
-                throw new BadRequestException("Index number is required for students");
-            }
-            if (userRepository.existsByIndexNumber(request.getIndexNumber())) {
-                throw new BadRequestException("Index number already in use");
-            }
+        // ─── SECURITY: BUG-2 / P0.2 — public registration is STUDENT-only ───────
+        // This endpoint is publicly reachable (SecurityConfig permits /api/auth/**),
+        // so we MUST NEVER trust the role supplied by the caller. Every account created
+        // through public registration is forced to STUDENT. Privileged roles
+        // (MENTOR, STUDENT_SERVICE, COMMITTEE, ARCHIVE) are provisioned exclusively via
+        // DataInitializer / administrative mechanisms — never through this path.
+        // request.getRole() is deliberately ignored (kept on the DTO only for backward
+        // compatibility with existing clients); it can no longer escalate privilege.
+        final Role role = Role.STUDENT;
+
+        // A STUDENT must have a unique, non-blank index number. Because every public
+        // registration is now a STUDENT, this check always applies.
+        if (request.getIndexNumber() == null || request.getIndexNumber().isBlank()) {
+            throw new BadRequestException("Index number is required for students");
+        }
+        if (userRepository.existsByIndexNumber(request.getIndexNumber())) {
+            throw new BadRequestException("Index number already in use");
         }
 
         User user = User.builder()
                 .email(request.getEmail())
                 .passwordHash(passwordEncoder.encode(request.getPassword()))
                 .fullName(request.getFullName())
-                .role(request.getRole())
-                .indexNumber(request.getRole() == Role.STUDENT ? request.getIndexNumber() : null)
+                .role(role)
+                .indexNumber(request.getIndexNumber())
                 .build();
 
         userRepository.save(user);

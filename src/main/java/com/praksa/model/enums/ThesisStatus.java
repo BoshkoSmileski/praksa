@@ -31,6 +31,9 @@ public enum ThesisStatus {
 
     // Step 9-11: Defense
     PENDING_DEFENSE_CHECK,
+    // Student has requested a defense; waiting for STUDENT_SERVICE to schedule it
+    // (room + date/time). Added for roadmap Item #6 (student-initiated defense request).
+    PENDING_DEFENSE_SCHEDULING,
     DEFENSE_SCHEDULED,
 
     // Step 12: Archived

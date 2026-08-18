@@ -11,14 +11,17 @@ import com.praksa.model.ThesisComment;
 import com.praksa.model.ThesisStatusHistory;
 import com.praksa.model.ThesisVersion;
 import com.praksa.model.User;
+import com.praksa.model.enums.NotificationType;
 import com.praksa.model.enums.Role;
 import com.praksa.model.enums.ThesisStatus;
+import com.praksa.repository.CommitteeMemberRepository;
 import com.praksa.repository.ThesisCommentRepository;
 import com.praksa.repository.ThesisRepository;
 import com.praksa.repository.ThesisStatusHistoryRepository;
 import com.praksa.repository.ThesisVersionRepository;
 import com.praksa.security.SecurityUtils;
 import com.praksa.service.FileStorageService;
+import com.praksa.service.NotificationService;
 import com.praksa.service.ThesisVersionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -42,8 +45,10 @@ public class ThesisVersionServiceImpl implements ThesisVersionService {
     private final ThesisVersionRepository versionRepository;
     private final ThesisCommentRepository commentRepository;
     private final ThesisStatusHistoryRepository statusHistoryRepository;
+    private final CommitteeMemberRepository committeeMemberRepository;
     private final FileStorageService fileStorageService;
     private final SecurityUtils securityUtils;
+    private final NotificationService notificationService;
 
     @Value("${file.upload-dir}")
     private String uploadDir;
@@ -133,6 +138,15 @@ public class ThesisVersionServiceImpl implements ThesisVersionService {
             transitionStatus(thesis, ThesisStatus.FINAL_SUBMITTED, student);
         }
 
+        // ─── Notification (only after the final version is persisted) ────────
+        // Recipient is the assigned mentor only. markAsFinal runs while the thesis is
+        // IN_PROGRESS — the defense committee is not formed until much later (after
+        // MENTOR_APPROVED), so there are no committee members to notify at this point.
+        // The mentor is guaranteed to be assigned by this stage; guarded for safety.
+        if (thesis.getMentor() != null) {
+            notificationService.notify(thesis.getMentor(), thesis, NotificationType.FINAL_VERSION_SUBMITTED);
+        }
+
         return ThesisVersionResponse.from(version);
     }
 
@@ -144,10 +158,15 @@ public class ThesisVersionServiceImpl implements ThesisVersionService {
     @Transactional(readOnly = true)
     public List<ThesisVersionResponse> getVersions(UUID thesisId) {
         Thesis thesis = findThesis(thesisId);
-        checkReadAccess(thesis, securityUtils.getCurrentUser());
+        User user = securityUtils.getCurrentUser();
+        checkThesisReadAccess(thesis, user);
 
+        // Filter per-user visibility: committee members only see the final version.
+        // This is enforced here — not just in the UI — so a hand-crafted request cannot
+        // enumerate draft versions.
         return versionRepository.findByThesisOrderByVersionNumberAsc(thesis)
                 .stream()
+                .filter(v -> canSeeVersion(thesis, v, user))
                 .map(ThesisVersionResponse::from)
                 .toList();
     }
@@ -160,9 +179,13 @@ public class ThesisVersionServiceImpl implements ThesisVersionService {
     @Transactional(readOnly = true)
     public Resource downloadVersion(UUID thesisId, UUID versionId) {
         Thesis thesis = findThesis(thesisId);
-        checkReadAccess(thesis, securityUtils.getCurrentUser());
+        User user = securityUtils.getCurrentUser();
+        checkThesisReadAccess(thesis, user);
 
         ThesisVersion version = findVersion(versionId, thesis);
+        if (!canSeeVersion(thesis, version, user)) {
+            throw new UnauthorizedException("You do not have access to this thesis version");
+        }
 
         try {
             Path filePath = Paths.get(version.getPdfUrl()).toAbsolutePath().normalize();
@@ -217,9 +240,15 @@ public class ThesisVersionServiceImpl implements ThesisVersionService {
     @Transactional(readOnly = true)
     public List<ThesisCommentResponse> getComments(UUID thesisId, UUID versionId) {
         Thesis thesis = findThesis(thesisId);
-        checkReadAccess(thesis, securityUtils.getCurrentUser());
+        User user = securityUtils.getCurrentUser();
+        checkThesisReadAccess(thesis, user);
 
         ThesisVersion version = findVersion(versionId, thesis);
+        // Comments follow the visibility of the underlying version — a committee
+        // member cannot read comments on a draft they aren't allowed to see.
+        if (!canSeeVersion(thesis, version, user)) {
+            throw new UnauthorizedException("You do not have access to comments on this thesis version");
+        }
 
         return commentRepository.findByVersionOrderByCreatedAtAsc(version)
                 .stream()
@@ -277,24 +306,47 @@ public class ThesisVersionServiceImpl implements ThesisVersionService {
     }
 
     /**
-     * Checks whether the current user has read access to a thesis.
-     * Student sees their own, mentor sees assigned, admin/archive/committee see all.
+     * Coarse gate: may the user see this thesis's version area at all?
+     *
+     *   STUDENT (owner) / MENTOR (assigned) / STUDENT_SERVICE / ARCHIVE — allowed unconditionally.
+     *   Any user holding a CommitteeMember seat on this thesis — allowed (final version only,
+     *       enforced downstream by {@link #canSeeVersion}).
+     *   COMMITTEE role users without a committee seat on this thesis — denied. The COMMITTEE
+     *       role is only meaningful when the user is actually a member of the given committee.
      */
-    private void checkReadAccess(Thesis thesis, User user) {
-        if (user.getRole() == Role.STUDENT_SERVICE
-                || user.getRole() == Role.ARCHIVE
-                || user.getRole() == Role.COMMITTEE) {
-            return;
-        }
+    private void checkThesisReadAccess(Thesis thesis, User user) {
         if (user.getRole() == Role.STUDENT
-                && thesis.getStudent().getId().equals(user.getId())) {
-            return;
-        }
+                && thesis.getStudent().getId().equals(user.getId())) return;
         if (user.getRole() == Role.MENTOR
                 && thesis.getMentor() != null
-                && thesis.getMentor().getId().equals(user.getId())) {
-            return;
-        }
+                && thesis.getMentor().getId().equals(user.getId())) return;
+        if (user.getRole() == Role.STUDENT_SERVICE) return;
+        if (user.getRole() == Role.ARCHIVE) return;
+        if (isCommitteeMember(thesis, user)) return;
         throw new UnauthorizedException("You do not have access to this thesis");
+    }
+
+    /**
+     * Fine-grained gate: may the user see this specific version?
+     *
+     *   Student owner / assigned mentor / STUDENT_SERVICE / ARCHIVE — every version.
+     *   Committee members (of any Role) — the FINAL version only. If no version is marked
+     *       final, or the requested version is a draft, they see nothing.
+     *   Anyone else — no.
+     */
+    private boolean canSeeVersion(Thesis thesis, ThesisVersion version, User user) {
+        if (user.getRole() == Role.STUDENT
+                && thesis.getStudent().getId().equals(user.getId())) return true;
+        if (user.getRole() == Role.MENTOR
+                && thesis.getMentor() != null
+                && thesis.getMentor().getId().equals(user.getId())) return true;
+        if (user.getRole() == Role.STUDENT_SERVICE) return true;
+        if (user.getRole() == Role.ARCHIVE) return true;
+        if (isCommitteeMember(thesis, user)) return version.isFinal();
+        return false;
+    }
+
+    private boolean isCommitteeMember(Thesis thesis, User user) {
+        return committeeMemberRepository.existsByThesisAndProfessor(thesis, user);
     }
 }

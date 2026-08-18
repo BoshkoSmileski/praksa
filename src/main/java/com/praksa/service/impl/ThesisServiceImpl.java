@@ -15,6 +15,7 @@ import com.praksa.repository.ThesisRepository;
 import com.praksa.repository.ThesisStatusHistoryRepository;
 import com.praksa.repository.UserRepository;
 import com.praksa.security.SecurityUtils;
+import com.praksa.security.ThesisReadAccessPolicy;
 import com.praksa.service.ApplicationPdfService;
 import com.praksa.service.NotificationService;
 import com.praksa.service.ThesisService;
@@ -22,6 +23,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -29,12 +31,19 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class ThesisServiceImpl implements ThesisService {
 
+    /**
+     * Minimum academic credits a student must hold before they may open a thesis
+     * application. Enforced server-side in createThesis. Exactly 200 is allowed.
+     */
+    private static final int REQUIRED_CREDITS_FOR_THESIS = 200;
+
     private final ThesisRepository thesisRepository;
     private final ThesisStatusHistoryRepository statusHistoryRepository;
     private final UserRepository userRepository;
     private final SecurityUtils securityUtils;
     private final NotificationService notificationService;
     private final ApplicationPdfService applicationPdfService;
+    private final ThesisReadAccessPolicy thesisReadAccessPolicy;
 
     // -------------------------------------------------------------------------
     // STEP 1: Student requests eligibility check
@@ -49,18 +58,39 @@ public class ThesisServiceImpl implements ThesisService {
         requireRole(student, Role.STUDENT);
 
         // A student can only have one active thesis at a time.
-        // We check: does this student have any thesis that is NOT archived?
+        // "Active" means any thesis that is not in a non-active terminal state.
+        // ARCHIVED is a successful terminal state; ELIGIBILITY_REJECTED is a dead-end
+        // terminal state that has no outgoing transition — a student whose eligibility
+        // was rejected must be able to start over. Both are preserved as historical/audit
+        // rows (never deleted or re-statused); they simply do not block a new thesis.
         boolean hasActive = thesisRepository.findByStudent(student).stream()
-                .anyMatch(t -> t.getStatus() != ThesisStatus.ARCHIVED);
+                .anyMatch(t -> isActiveStatus(t.getStatus()));
         if (hasActive) {
             throw new BadRequestException("You already have an active thesis");
         }
+
+        // 200-credit eligibility gate. A null (unknown) credit balance is treated as
+        // NOT eligible — a student must have their credits recorded by Student Service first.
+        // Enforced here in the service layer so it cannot be bypassed from the client.
+        Integer credits = student.getCredits();
+        if (credits == null || credits < REQUIRED_CREDITS_FOR_THESIS) {
+            throw new BadRequestException(
+                    "At least " + REQUIRED_CREDITS_FOR_THESIS + " credits are required to submit a thesis application.");
+        }
+
+        // Anchor createdAt and the 1-month submission deadline to the same instant.
+        // @PrePersist keeps an explicitly-set createdAt, so this is authoritative.
+        // plusMonths(1) uses java.time month arithmetic — it correctly handles
+        // months of 28–31 days rather than assuming a fixed 30-day span.
+        OffsetDateTime now = OffsetDateTime.now();
 
         Thesis thesis = Thesis.builder()
                 .student(student)
                 .title(request.getTitle())
                 .studentComment(request.getStudentComment())
                 .status(ThesisStatus.PENDING_ELIGIBILITY_CHECK)
+                .createdAt(now)
+                .submissionDeadline(now.plusMonths(1))
                 .build();
 
         thesisRepository.save(thesis);
@@ -186,7 +216,12 @@ public class ThesisServiceImpl implements ThesisService {
                 // Increment revision counter so the student / list views can show the cycle count
                 thesis.setRevisionCount(thesis.getRevisionCount() + 1);
                 transitionStatus(thesis, ThesisStatus.MENTOR_REQUESTED_CHANGES, mentor);
-                notificationService.notify(thesis.getStudent(), thesis, NotificationType.MENTOR_REQUESTED_CHANGES);
+                // Surface the mentor's feedback in the notification body so the student sees WHAT to
+                // change without opening the thesis. Primitive String — nothing crosses the @Async boundary.
+                String message = NotificationType.MENTOR_REQUESTED_CHANGES.getDefaultBody()
+                        + "\n\nMentor feedback: " + thesis.getMentorComment();
+                notificationService.notify(thesis.getStudent(), thesis,
+                        NotificationType.MENTOR_REQUESTED_CHANGES, message);
             }
         }
 
@@ -258,6 +293,16 @@ public class ThesisServiceImpl implements ThesisService {
                     "Application can only be submitted from APPLICATION_SUBMITTED or a rejection status. Current: " + s);
         }
 
+        // Enforce the 1-month submission deadline BEFORE doing any work (no PDF is
+        // generated and no status transition happens if the deadline has passed).
+        // Legacy theses created before this feature carry a null deadline and are
+        // intentionally NOT blocked — see CLAUDE.md Item #5 for the legacy policy.
+        OffsetDateTime deadline = thesis.getSubmissionDeadline();
+        if (deadline != null && OffsetDateTime.now().isAfter(deadline)) {
+            throw new BadRequestException(
+                    "The submission deadline has passed; the thesis application can no longer be submitted.");
+        }
+
         // Generate the application PDF artifact — archive/service review this
         String pdfPath = applicationPdfService.generate(thesis);
         thesis.setApplicationPdfPath(pdfPath);
@@ -299,8 +344,12 @@ public class ThesisServiceImpl implements ThesisService {
             notificationService.notifyRole(Role.STUDENT_SERVICE, thesis, NotificationType.APPLICATION_PENDING_SERVICE);
         } else {
             transitionStatus(thesis, ThesisStatus.APPLICATION_REJECTED_BY_ARCHIVE, archiveUser);
-            // Tell student about the rejection
-            notificationService.notify(thesis.getStudent(), thesis, NotificationType.APPLICATION_REJECTED_BY_ARCHIVE);
+            // Tell student about the rejection — include the reason in the message body.
+            // We pass a primitive String (not an entity) so nothing crosses the @Async boundary.
+            String message = NotificationType.APPLICATION_REJECTED_BY_ARCHIVE.getDefaultBody()
+                    + "\n\nRejection reason: " + thesis.getArchiveComment();
+            notificationService.notify(thesis.getStudent(), thesis,
+                    NotificationType.APPLICATION_REJECTED_BY_ARCHIVE, message);
         }
 
         return ThesisResponse.from(thesis);
@@ -332,7 +381,11 @@ public class ThesisServiceImpl implements ThesisService {
             notificationService.notify(thesis.getStudent(), thesis, NotificationType.APPLICATION_VALIDATED);
         } else {
             transitionStatus(thesis, ThesisStatus.APPLICATION_REJECTED_BY_SERVICE, serviceUser);
-            notificationService.notify(thesis.getStudent(), thesis, NotificationType.APPLICATION_REJECTED_BY_SERVICE);
+            // Include the rejection reason in the message body (primitive String — no entity crosses @Async).
+            String message = NotificationType.APPLICATION_REJECTED_BY_SERVICE.getDefaultBody()
+                    + "\n\nRejection reason: " + thesis.getServiceComment();
+            notificationService.notify(thesis.getStudent(), thesis,
+                    NotificationType.APPLICATION_REJECTED_BY_SERVICE, message);
         }
 
         return ThesisResponse.from(thesis);
@@ -364,6 +417,80 @@ public class ThesisServiceImpl implements ThesisService {
     }
 
     // -------------------------------------------------------------------------
+    // P2.2: Archive adds/edits the free-text archive notes on an ARCHIVED thesis
+    //
+    // Reuses the existing Thesis.archiveNotes field (no new column, no schema change).
+    // ARCHIVE-role only, enforced server-side. Editing notes NEVER changes the thesis
+    // status (no transitionStatus call → no ThesisStatusHistory row) and NEVER emits a
+    // notification — it is a pure record-annotation update. A null/blank note clears it.
+    // -------------------------------------------------------------------------
+
+    @Override
+    @Transactional
+    public ThesisResponse updateArchiveNotes(UUID thesisId, ArchiveNotesRequest request) {
+        User archiveUser = securityUtils.getCurrentUser();
+        // Role check FIRST — a non-ARCHIVE caller is rejected (403) before the thesis is
+        // even loaded, so a thesis id cannot be probed for existence by an unauthorized user.
+        requireRole(archiveUser, Role.ARCHIVE);
+
+        Thesis thesis = findThesis(thesisId);
+        // Notes belong to the official archive record, which only exists once the thesis is
+        // ARCHIVED. Any other status → 400 (and the status is left untouched regardless).
+        requireStatus(thesis, ThesisStatus.ARCHIVED);
+
+        String notes = request.getNotes();
+        // Normalize: a blank note clears the field; otherwise store the trimmed text.
+        thesis.setArchiveNotes(notes == null || notes.isBlank() ? null : notes.trim());
+
+        // Persist the annotation only. No transitionStatus() → no history row; no notification.
+        thesisRepository.save(thesis);
+
+        return ThesisResponse.from(thesis);
+    }
+
+    // -------------------------------------------------------------------------
+    // ITEM #8: Student Service explicitly verifies the defense conditions
+    //
+    // Before a defense can be scheduled the student must have their defense
+    // conditions confirmed. For this project the confirmation is a MANUAL pair of
+    // booleans (exams + documentation) — no external examination system.
+    //
+    // The thesis must NOT advance out of PENDING_DEFENSE_CHECK until BOTH conditions
+    // are explicitly true. On success this is the ONLY action that moves the thesis
+    // into PENDING_DEFENSE_SCHEDULING; the student may then request the defense
+    // (Item #6). If either condition is false the request is rejected with a 400 and
+    // nothing changes — no transition, no history row, no success notification.
+    // -------------------------------------------------------------------------
+
+    @Override
+    @Transactional
+    public ThesisResponse verifyDefenseEligibility(UUID thesisId, DefenseEligibilityRequest request) {
+        User serviceUser = securityUtils.getCurrentUser();
+        requireRole(serviceUser, Role.STUDENT_SERVICE);
+
+        Thesis thesis = findThesis(thesisId);
+        requireStatus(thesis, ThesisStatus.PENDING_DEFENSE_CHECK);
+
+        // BOTH conditions must be explicitly confirmed true. A null (missing) value is
+        // treated as NOT confirmed. If either is false we reject BEFORE any state change,
+        // so a failed verification leaves the thesis exactly as it was.
+        boolean examsCompleted = Boolean.TRUE.equals(request.getExamsCompleted());
+        boolean documentationComplete = Boolean.TRUE.equals(request.getDocumentationComplete());
+        if (!examsCompleted || !documentationComplete) {
+            throw new BadRequestException(
+                    "Defense eligibility not confirmed: both required exams and required documentation "
+                            + "must be marked complete before the defense can proceed.");
+        }
+
+        transitionStatus(thesis, ThesisStatus.PENDING_DEFENSE_SCHEDULING, serviceUser);
+
+        // Tell the student their eligibility was verified and they may now request a defense.
+        notificationService.notify(thesis.getStudent(), thesis, NotificationType.DEFENSE_ELIGIBILITY_VERIFIED);
+
+        return ThesisResponse.from(thesis);
+    }
+
+    // -------------------------------------------------------------------------
     // READ OPERATIONS
     // -------------------------------------------------------------------------
 
@@ -375,6 +502,10 @@ public class ThesisServiceImpl implements ThesisService {
         // slightly faster, and keeps the session open so lazy fields can be accessed
         // safely while we build the DTO.
         Thesis thesis = findThesis(thesisId);
+        // READ-SIDE IDOR guard: a logged-in user may only read a thesis they are related to
+        // (owner / assigned mentor / seated committee member / STUDENT_SERVICE / ARCHIVE).
+        // Knowing the UUID is not enough.
+        thesisReadAccessPolicy.requireReadAccess(thesis, securityUtils.getCurrentUser());
         return ThesisResponse.from(thesis);
     }
 
@@ -394,8 +525,17 @@ public class ThesisServiceImpl implements ThesisService {
                     .filter(t -> t.getStatus() == ThesisStatus.PENDING_ARCHIVE_VALIDATION
                               || t.getStatus() == ThesisStatus.ARCHIVED)
                     .toList();
+        } else if (user.getRole() == Role.COMMITTEE) {
+            // COMMITTEE-role users participate only in defense grading. Scope their list
+            // to theses they can act on (DEFENSE_SCHEDULED) plus theses already archived
+            // (defense grading is the transition that archives a thesis, so recently graded
+            // theses stay visible here for reference).
+            theses = thesisRepository.findAll().stream()
+                    .filter(t -> t.getStatus() == ThesisStatus.DEFENSE_SCHEDULED
+                              || t.getStatus() == ThesisStatus.ARCHIVED)
+                    .toList();
         } else {
-            // Student Service and Committee see all theses
+            // Student Service sees all theses
             theses = thesisRepository.findAll();
         }
 
@@ -409,21 +549,97 @@ public class ThesisServiceImpl implements ThesisService {
 
     @Override
     @Transactional(readOnly = true)
+    public List<ThesisResponse> getCommitteeTheses() {
+        User user = securityUtils.getCurrentUser();
+        List<Thesis> theses;
+
+        // Which statuses "belong" on the committee page — anywhere a committee action is
+        // relevant: a mentor has approved the thesis and could propose members, service
+        // approval / accepting review happens here, defense-check follows immediately.
+        java.util.EnumSet<ThesisStatus> committeeStatuses = java.util.EnumSet.of(
+                ThesisStatus.MENTOR_APPROVED,
+                ThesisStatus.COMMITTEE_REVIEW,
+                ThesisStatus.COMMITTEE_ACCEPTED,
+                ThesisStatus.PENDING_DEFENSE_CHECK,
+                ThesisStatus.PENDING_DEFENSE_SCHEDULING,
+                ThesisStatus.DEFENSE_SCHEDULED);
+
+        if (user.getRole() == Role.MENTOR) {
+            // Union of theses they mentor and theses they serve on as a committee member.
+            java.util.Map<UUID, Thesis> byId = new java.util.LinkedHashMap<>();
+            for (Thesis t : thesisRepository.findByMentor(user)) byId.put(t.getId(), t);
+            for (Thesis t : thesisRepository.findByCommitteeMember(user)) byId.put(t.getId(), t);
+            theses = byId.values().stream()
+                    .filter(t -> committeeStatuses.contains(t.getStatus()))
+                    .toList();
+        } else if (user.getRole() == Role.STUDENT_SERVICE) {
+            theses = thesisRepository.findAll().stream()
+                    .filter(t -> committeeStatuses.contains(t.getStatus()))
+                    .toList();
+        } else if (user.getRole() == Role.COMMITTEE) {
+            // COMMITTEE-role users are involved in defense grading, not committee formation.
+            // Show them the theses they might grade.
+            theses = thesisRepository.findByStatus(ThesisStatus.DEFENSE_SCHEDULED);
+        } else {
+            throw new UnauthorizedException("You do not have access to the committee view");
+        }
+
+        return theses.stream().map(ThesisResponse::from).toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ThesisResponse> getDefenseTheses() {
+        User user = securityUtils.getCurrentUser();
+        List<Thesis> theses;
+
+        java.util.EnumSet<ThesisStatus> defenseStatuses = java.util.EnumSet.of(
+                ThesisStatus.PENDING_DEFENSE_CHECK,
+                ThesisStatus.PENDING_DEFENSE_SCHEDULING,
+                ThesisStatus.DEFENSE_SCHEDULED,
+                ThesisStatus.ARCHIVED);
+
+        if (user.getRole() == Role.STUDENT) {
+            theses = thesisRepository.findByStudent(user).stream()
+                    .filter(t -> defenseStatuses.contains(t.getStatus()))
+                    .toList();
+        } else if (user.getRole() == Role.MENTOR) {
+            java.util.Map<UUID, Thesis> byId = new java.util.LinkedHashMap<>();
+            for (Thesis t : thesisRepository.findByMentor(user)) byId.put(t.getId(), t);
+            for (Thesis t : thesisRepository.findByCommitteeMember(user)) byId.put(t.getId(), t);
+            theses = byId.values().stream()
+                    .filter(t -> defenseStatuses.contains(t.getStatus()))
+                    .toList();
+        } else if (user.getRole() == Role.COMMITTEE) {
+            theses = thesisRepository.findAll().stream()
+                    .filter(t -> t.getStatus() == ThesisStatus.DEFENSE_SCHEDULED
+                              || t.getStatus() == ThesisStatus.ARCHIVED)
+                    .toList();
+        } else if (user.getRole() == Role.STUDENT_SERVICE) {
+            theses = thesisRepository.findAll().stream()
+                    .filter(t -> defenseStatuses.contains(t.getStatus()))
+                    .toList();
+        } else {
+            throw new UnauthorizedException("You do not have access to the defenses view");
+        }
+
+        return theses.stream().map(ThesisResponse::from).toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public org.springframework.core.io.Resource downloadApplicationPdf(UUID thesisId) {
         Thesis thesis = findThesis(thesisId);
+        // AUTHORIZATION FIRST — thesis-specific, before any PDF/file work. A user may download
+        // the application PDF only if they are related to THIS thesis: the student owner, the
+        // assigned mentor, a committee member seated on THIS thesis, STUDENT_SERVICE, or ARCHIVE.
+        // The COMMITTEE role alone is NOT sufficient — an unseated COMMITTEE user, or one seated
+        // on a different thesis, is denied. Reuses the shared read-access policy so this endpoint
+        // authorizes against the SAME rule as the other thesis-level reads (no duplicate logic).
+        // Knowing the UUID never bypasses this.
+        thesisReadAccessPolicy.requireReadAccess(thesis, securityUtils.getCurrentUser());
         if (thesis.getApplicationPdfPath() == null) {
             throw new ResourceNotFoundException("No application PDF generated yet for this thesis");
-        }
-        // Access: student owner, assigned mentor, any STUDENT_SERVICE/ARCHIVE/COMMITTEE user
-        User user = securityUtils.getCurrentUser();
-        boolean allowed =
-                (user.getRole() == Role.STUDENT && thesis.getStudent().getId().equals(user.getId())) ||
-                (user.getRole() == Role.MENTOR  && thesis.getMentor() != null && thesis.getMentor().getId().equals(user.getId())) ||
-                (user.getRole() == Role.STUDENT_SERVICE) ||
-                (user.getRole() == Role.ARCHIVE) ||
-                (user.getRole() == Role.COMMITTEE);
-        if (!allowed) {
-            throw new UnauthorizedException("You do not have access to this application PDF");
         }
         try {
             java.nio.file.Path p = java.nio.file.Paths.get(thesis.getApplicationPdfPath()).toAbsolutePath().normalize();
@@ -443,6 +659,15 @@ public class ThesisServiceImpl implements ThesisService {
         Thesis thesis = thesisRepository.findByArchiveRegistrationNumber(registrationNumber.trim())
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "No thesis found with registration number: " + registrationNumber));
+        // READ-SIDE IDOR guard — same rule as getThesisById. Registration numbers are
+        // sequential (DT-YYYY-NNNN) and trivially enumerable, so without this check any
+        // authenticated user could harvest every archived thesis (including the internal
+        // student/mentor/archive/service comments carried by ThesisResponse) by walking the
+        // number space. Only a user related to THIS thesis (owner / assigned mentor / seated
+        // committee member / STUDENT_SERVICE / ARCHIVE) may read it — matching every other
+        // thesis-level read. STUDENT_SERVICE and ARCHIVE (the legitimate archive-search users)
+        // retain full access, so the archive lookup UI keeps working.
+        thesisReadAccessPolicy.requireReadAccess(thesis, securityUtils.getCurrentUser());
         return ThesisResponse.from(thesis);
     }
 
@@ -450,6 +675,9 @@ public class ThesisServiceImpl implements ThesisService {
     @Transactional(readOnly = true)
     public List<ThesisStatusHistoryResponse> getStatusHistory(UUID thesisId) {
         Thesis thesis = findThesis(thesisId);
+        // Same underlying-thesis authorization as getThesisById — the status history is
+        // sensitive workflow data and must not be readable by an unrelated user via UUID.
+        thesisReadAccessPolicy.requireReadAccess(thesis, securityUtils.getCurrentUser());
         return statusHistoryRepository.findByThesisOrderByChangedAtAsc(thesis)
                 .stream()
                 .map(ThesisStatusHistoryResponse::from)
@@ -463,6 +691,23 @@ public class ThesisServiceImpl implements ThesisService {
     private Thesis findThesis(UUID id) {
         return thesisRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Thesis not found with id: " + id));
+    }
+
+    /**
+     * Whether a thesis in this status counts as the student's one "active" thesis for the
+     * one-active-thesis rule in {@link #createThesis}. Non-active terminal states do NOT
+     * block a new thesis:
+     * <ul>
+     *   <li>{@code ARCHIVED} — successfully completed and archived.</li>
+     *   <li>{@code ELIGIBILITY_REJECTED} — a dead-end with no outgoing transition; the
+     *       student was refused eligibility and must be allowed to submit a fresh thesis.
+     *       The rejected row itself is left untouched as historical/audit data.</li>
+     * </ul>
+     * Every other status is considered active and enforces the one-active-thesis rule.
+     */
+    private boolean isActiveStatus(ThesisStatus status) {
+        return status != ThesisStatus.ARCHIVED
+                && status != ThesisStatus.ELIGIBILITY_REJECTED;
     }
 
     /**

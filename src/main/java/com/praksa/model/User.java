@@ -38,6 +38,16 @@ public class User {
     @Column(name = "full_name", nullable = false)
     private String fullName;
 
+    /**
+     * Academic credits earned by the student. Relevant only for STUDENT users.
+     * Nullable on purpose: existing rows (and non-student roles) may have no value.
+     * A null or below-threshold value means the student is NOT eligible to submit a
+     * thesis application (see ThesisServiceImpl.createThesis, 200-credit gate).
+     * Only STUDENT_SERVICE may set/update this value (see UserServiceImpl.updateCredits).
+     */
+    @Column(name = "credits")
+    private Integer credits;
+
     @Column(name = "created_at")
     private OffsetDateTime createdAt;
 

@@ -13,13 +13,17 @@ import com.praksa.repository.ThesisRepository;
 import com.praksa.repository.ThesisStatusHistoryRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.DayOfWeek;
 import java.time.OffsetDateTime;
+import java.time.temporal.ChronoUnit;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Background tasks that run on a fixed schedule.
@@ -36,11 +40,42 @@ public class ScheduledTasksService {
     private static final long DEFENSE_REMINDER_WINDOW_HOURS_MIN = 23;
     private static final long DEFENSE_REMINDER_WINDOW_HOURS_MAX = 25;
 
+    /**
+     * Statuses that mean the formal thesis application has NOT yet been successfully
+     * submitted. If a thesis is still in one of these when its 1-month submission
+     * deadline passes, the reporting job below logs it. (PENDING_ARCHIVE_VALIDATION
+     * and everything after it means the application was already submitted in time.)
+     */
+    private static final Set<ThesisStatus> PRE_APPLICATION_STATUSES = EnumSet.of(
+            ThesisStatus.PENDING_ELIGIBILITY_CHECK,
+            ThesisStatus.TOPIC_SELECTION,
+            ThesisStatus.PENDING_MENTOR_APPROVAL,
+            ThesisStatus.MENTOR_REQUESTED_CHANGES,
+            ThesisStatus.MENTOR_REJECTED_TOPIC,
+            ThesisStatus.APPLICATION_SUBMITTED,
+            ThesisStatus.APPLICATION_REJECTED_BY_ARCHIVE,
+            ThesisStatus.APPLICATION_REJECTED_BY_SERVICE);
+
     private final ThesisRepository thesisRepository;
     private final ThesisStatusHistoryRepository statusHistoryRepository;
     private final DefenseRepository defenseRepository;
     private final CommitteeMemberRepository committeeRepository;
     private final NotificationService notificationService;
+
+    /**
+     * Max unsent notifications processed per retry run (P2.6). Bounds the batch so a large
+     * backlog can never fan out an unbounded number of async sends in one pass.
+     */
+    @Value("${notification.retry.batch-size:100}")
+    private int retryBatchSize;
+
+    /**
+     * Minimum age (ms) a notification must reach before the retry job considers it (P2.6).
+     * Skipping very new rows avoids racing the normal flow's original async send, which is
+     * the smallest reasonable guard against a duplicate email on a freshly created row.
+     */
+    @Value("${notification.retry.min-age-ms:120000}")
+    private long retryMinAgeMs;
 
     // ─────────────────────────────────────────────────────────────────────────
     // JOB 1 — Auto-advance committee review after 5 business days of silence
@@ -72,11 +107,13 @@ public class ScheduledTasksService {
             recordTransition(thesis, ThesisStatus.COMMITTEE_ACCEPTED);
             recordTransition(thesis, ThesisStatus.PENDING_DEFENSE_CHECK);
 
-            // Notify everyone involved
+            // Notify everyone involved that the review was auto-accepted after 5 business
+            // days of silence. The mentor holds a MENTOR_MEMBER committee seat (a thesis can
+            // only reach COMMITTEE_REVIEW via approveCommittee, which requires an approved
+            // 3-member committee including the auto-added mentor), so iterating the committee
+            // already notifies the mentor exactly once — mirroring the manual
+            // acceptCommitteeReview flow and avoiding a duplicate mentor notification.
             notificationService.notify(thesis.getStudent(), thesis, NotificationType.COMMITTEE_REVIEW_AUTO_ADVANCED);
-            if (thesis.getMentor() != null) {
-                notificationService.notify(thesis.getMentor(), thesis, NotificationType.COMMITTEE_REVIEW_AUTO_ADVANCED);
-            }
             for (CommitteeMember m : committeeRepository.findByThesis(thesis)) {
                 notificationService.notify(m.getProfessor(), thesis, NotificationType.COMMITTEE_REVIEW_AUTO_ADVANCED);
             }
@@ -114,11 +151,10 @@ public class ScheduledTasksService {
 
             // Student
             notificationService.notify(thesis.getStudent(), thesis, NotificationType.DEFENSE_REMINDER);
-            // Mentor
-            if (thesis.getMentor() != null) {
-                notificationService.notify(thesis.getMentor(), thesis, NotificationType.DEFENSE_REMINDER);
-            }
-            // Committee
+            // Committee — the mentor holds a MENTOR_MEMBER committee seat (a defense can only
+            // exist after committee formation + review), so iterating the committee notifies the
+            // mentor exactly once. This mirrors scheduleDefense/cancelDefense and avoids the
+            // duplicate mentor reminder a separate explicit notify would produce.
             for (CommitteeMember m : committeeRepository.findByThesis(thesis)) {
                 notificationService.notify(m.getProfessor(), thesis, NotificationType.DEFENSE_REMINDER);
             }
@@ -132,14 +168,83 @@ public class ScheduledTasksService {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // JOB 3 — Report theses that blew past their 1-month submission deadline
+    //
+    // Runs every 30 minutes. READ-ONLY: it only logs. It does NOT delete theses
+    // and does NOT change status — there is no "expired" terminal status in the
+    // workflow, and inventing one is out of scope for Item #5. The authoritative
+    // enforcement is at submission time (ThesisServiceImpl.submitApplication);
+    // this job merely surfaces expired-but-still-pending applications for staff.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    @Scheduled(fixedDelay = 30 * 60 * 1000, initialDelay = 120 * 1000)
+    @Transactional(readOnly = true)
+    public void reportExpiredPendingApplications() {
+        OffsetDateTime now = OffsetDateTime.now();
+        List<Thesis> expired = thesisRepository.findExpiredPendingApplications(now, PRE_APPLICATION_STATUSES);
+
+        if (expired.isEmpty()) {
+            log.debug("[ScheduledTasks] No expired pending thesis applications");
+            return;
+        }
+
+        log.warn("[ScheduledTasks] {} thesis application(s) past the submission deadline and not yet submitted:",
+                expired.size());
+        for (Thesis thesis : expired) {
+            log.warn("[ScheduledTasks]   thesis {} (status {}, deadline {}) — student can no longer submit",
+                    thesis.getId(), thesis.getStatus(), thesis.getSubmissionDeadline());
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // JOB 4 — Retry delivery of unsent notifications (P2.6)
+    //
+    // Notification rows are created is_sent=false and only flip to true when
+    // EmailService actually delivers the email. If a send fails (SMTP down) or mail
+    // is disabled when the row is created, it would otherwise stay unsent forever.
+    // This job walks a bounded, oldest-first page of unsent rows old enough to have
+    // cleared the normal flow's original async send, and re-dispatches each through
+    // the SAME EmailService path. It creates NO new rows and marks NOTHING sent
+    // itself — EmailService remains the single delivery authority (mail-enabled guard,
+    // send, and the is_sent=true write on success only).
+    //
+    // Interval + batch size + min-age are configurable (notification.retry.*). The
+    // default 15-min fixedDelay matches the project's unobtrusive scheduling style.
+    // Because fixedDelay (not fixedRate) runs on Spring's single-threaded scheduler,
+    // two retry runs never overlap within one instance. Cross-instance duplicate
+    // protection would need a shared lock (e.g. ShedLock) — infrastructure not present
+    // here — so it is a documented limitation, not a silent gap.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    @Scheduled(fixedDelayString = "${notification.retry.interval-ms:900000}",
+            initialDelayString = "${notification.retry.initial-delay-ms:150000}")
+    public void retryUnsentNotifications() {
+        try {
+            OffsetDateTime cutoff = OffsetDateTime.now().minus(retryMinAgeMs, ChronoUnit.MILLIS);
+            int dispatched = notificationService.retryUnsentNotifications(retryBatchSize, cutoff);
+            if (dispatched > 0) {
+                log.info("[ScheduledTasks] Notification retry re-dispatched {} unsent email(s)", dispatched);
+            } else {
+                log.debug("[ScheduledTasks] No unsent notifications eligible for retry");
+            }
+        } catch (Exception e) {
+            // Never let a retry-run failure kill the scheduled thread — the next run should
+            // still fire. Per-notification isolation lives in the service; this is a backstop.
+            log.error("[ScheduledTasks] Notification retry job failed: {}", e.getMessage());
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
      * Subtracts N business days (Mon-Fri) from the given timestamp.
      * Simple loop — correct enough for academic deadlines without external library.
+     * Weekends (Saturday, Sunday) do not count. Package-private so the working-day
+     * math can be unit-tested directly (Item #9).
      */
-    private OffsetDateTime minusBusinessDays(OffsetDateTime from, long businessDays) {
+    OffsetDateTime minusBusinessDays(OffsetDateTime from, long businessDays) {
         OffsetDateTime result = from;
         long remaining = businessDays;
         while (remaining > 0) {

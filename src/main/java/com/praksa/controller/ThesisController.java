@@ -49,6 +49,29 @@ public class ThesisController {
         return ResponseEntity.ok(ApiResponse.ok(thesisService.getMyTheses()));
     }
 
+    @Operation(
+        summary = "Get theses for the Committee view",
+        description = "Returns theses relevant to the caller's committee involvement. " +
+                      "MENTOR: theses where they mentor or hold a committee seat, in committee-related statuses. " +
+                      "STUDENT_SERVICE: all theses in committee-related statuses. " +
+                      "COMMITTEE: theses in DEFENSE_SCHEDULED (their grading scope)."
+    )
+    @GetMapping("/committee")
+    public ResponseEntity<ApiResponse<List<ThesisResponse>>> getCommitteeTheses() {
+        return ResponseEntity.ok(ApiResponse.ok(thesisService.getCommitteeTheses()));
+    }
+
+    @Operation(
+        summary = "Get theses for the Defenses view",
+        description = "Returns theses that have (or are ready for) a defense, scoped by role. " +
+                      "STUDENT: own theses. MENTOR: assigned theses (incl. those they serve on as committee). " +
+                      "COMMITTEE: theses in DEFENSE_SCHEDULED/ARCHIVED. STUDENT_SERVICE: all defense-related theses."
+    )
+    @GetMapping("/defenses")
+    public ResponseEntity<ApiResponse<List<ThesisResponse>>> getDefenseTheses() {
+        return ResponseEntity.ok(ApiResponse.ok(thesisService.getDefenseTheses()));
+    }
+
     @Operation(summary = "Get thesis by ID")
     @GetMapping("/{id}")
     public ResponseEntity<ApiResponse<ThesisResponse>> getThesisById(
@@ -70,9 +93,17 @@ public class ThesisController {
 
     @Operation(
         summary = "Download the thesis application PDF",
-        description = "Returns the generated application form as a PDF stream. " +
-                      "Accessible by student owner, assigned mentor, STUDENT_SERVICE, ARCHIVE, COMMITTEE."
+        description = "Returns the generated application form as a PDF stream. Authorized against " +
+                      "THIS specific thesis: the student owner, the assigned mentor, a committee " +
+                      "member seated on this thesis, STUDENT_SERVICE, or ARCHIVE. The bare COMMITTEE " +
+                      "role is not sufficient — an unseated COMMITTEE user (or one seated on another " +
+                      "thesis) receives 403."
     )
+    @ApiResponses({
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "PDF stream returned"),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Caller is not authorized for this thesis"),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Thesis not found, or no application PDF generated yet")
+    })
     @GetMapping("/{id}/application-pdf")
     public ResponseEntity<org.springframework.core.io.Resource> downloadApplicationPdf(@PathVariable UUID id) {
         org.springframework.core.io.Resource resource = thesisService.downloadApplicationPdf(id);
@@ -188,5 +219,45 @@ public class ThesisController {
     @PatchMapping("/{id}/approve-final")
     public ResponseEntity<ApiResponse<ThesisResponse>> approveFinalThesis(@PathVariable UUID id) {
         return ResponseEntity.ok(ApiResponse.ok(thesisService.approveFinalThesis(id)));
+    }
+
+    @Operation(
+        summary = "Update archive notes (P2.2)",
+        description = "Archive adds or edits the free-text notes on an already-archived thesis " +
+                      "(reuses Thesis.archiveNotes). A null/blank note clears the field. This never " +
+                      "changes the thesis status and never sends a notification. Requires role: ARCHIVE, " +
+                      "and the thesis must be in ARCHIVED status."
+    )
+    @ApiResponses({
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Archive notes updated"),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Thesis is not ARCHIVED, or notes exceed the length limit"),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Caller is not ARCHIVE"),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Thesis not found")
+    })
+    @PatchMapping("/{id}/archive-notes")
+    public ResponseEntity<ApiResponse<ThesisResponse>> updateArchiveNotes(
+            @PathVariable UUID id,
+            @Valid @RequestBody ArchiveNotesRequest request) {
+        return ResponseEntity.ok(ApiResponse.ok(thesisService.updateArchiveNotes(id, request)));
+    }
+
+    @Operation(
+        summary = "Verify defense eligibility (Item #8)",
+        description = "Student Service explicitly confirms the student has fulfilled the defense conditions " +
+                      "(required exams completed + required documentation complete). BOTH must be true. " +
+                      "On success PENDING_DEFENSE_CHECK → PENDING_DEFENSE_SCHEDULING, after which the student " +
+                      "may request the defense. If either condition is false the request is rejected (400) and " +
+                      "the status is unchanged. Requires role: STUDENT_SERVICE."
+    )
+    @ApiResponses({
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Eligibility verified, status = PENDING_DEFENSE_SCHEDULING"),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A condition is not confirmed, or the thesis is not in PENDING_DEFENSE_CHECK"),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Caller is not STUDENT_SERVICE")
+    })
+    @PatchMapping("/{id}/defense-eligibility")
+    public ResponseEntity<ApiResponse<ThesisResponse>> verifyDefenseEligibility(
+            @PathVariable UUID id,
+            @Valid @RequestBody DefenseEligibilityRequest request) {
+        return ResponseEntity.ok(ApiResponse.ok(thesisService.verifyDefenseEligibility(id, request)));
     }
 }

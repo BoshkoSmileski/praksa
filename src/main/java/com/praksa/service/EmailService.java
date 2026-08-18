@@ -23,7 +23,16 @@ public class EmailService {
     private final JavaMailSender mailSender;
     private final NotificationRepository notificationRepository;
 
-    @Value("${spring.mail.username}")
+    /**
+     * Master switch for email delivery. When false (the default when no SMTP is
+     * configured), delivery is skipped cleanly: no SMTP connection is attempted and
+     * the notification row is left is_sent=false — we never pretend an email was sent.
+     */
+    @Value("${app.mail.enabled:false}")
+    private boolean mailEnabled;
+
+    /** Sender address. Falls back to the SMTP username, then a local placeholder. */
+    @Value("${app.mail.from:${spring.mail.username:no-reply@diploma-system.local}}")
     private String fromAddress;
 
     /**
@@ -42,6 +51,14 @@ public class EmailService {
     @Async("emailTaskExecutor")
     @Transactional  // own transaction — independent from the caller's transaction
     public void sendAsync(UUID notificationId, String toEmail, String subject, String body) {
+        // Email delivery is disabled (no SMTP configured). Skip the send but do NOT
+        // mark the notification as sent — the row stays is_sent=false, which is the
+        // honest state (the message still shows in the in-app notification list).
+        if (!mailEnabled) {
+            log.info("Email delivery disabled (app.mail.enabled=false); notification {} "
+                    + "left unsent, available in-app only.", notificationId);
+            return;
+        }
         try {
             SimpleMailMessage message = new SimpleMailMessage();
             message.setFrom(fromAddress);

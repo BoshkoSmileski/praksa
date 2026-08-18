@@ -2,6 +2,7 @@ package com.praksa.model;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.ColumnDefault;
 import org.hibernate.annotations.UuidGenerator;
 
 import java.time.OffsetDateTime;
@@ -37,6 +38,22 @@ public class Notification {
 
     @Column(name = "sent_at")
     private OffsetDateTime sentAt;
+
+    /**
+     * P3.6 — Read/unread state of the notification in the APPLICATION UI.
+     *
+     * This is completely independent of {@link #isSent} (email delivery). A notification
+     * can be sent-but-unread, unsent-but-read, etc. — all four combinations are valid.
+     * New notifications default to unread (false); the user marks them read via the
+     * mark-read endpoints. Nothing in the email/retry path ever touches this flag.
+     *
+     * {@code @ColumnDefault("false")} makes Hibernate emit {@code DEFAULT false} in the
+     * generated {@code ALTER TABLE ... ADD COLUMN} under {@code ddl-auto=update}, so the
+     * new NOT NULL column back-fills existing notification rows as unread safely.
+     */
+    @Column(name = "is_read", nullable = false)
+    @ColumnDefault("false")
+    private boolean isRead;
 
     @Column(name = "created_at")
     private OffsetDateTime createdAt;

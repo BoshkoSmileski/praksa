@@ -21,9 +21,14 @@ public class RegisterRequest {
     @NotBlank(message = "Full name is required")
     private String fullName;
 
+    // SECURITY (BUG-2 / P0.2): this field is IGNORED by the server. Public registration
+    // always creates a STUDENT (see AuthServiceImpl.register). It is kept only for
+    // backward compatibility with existing clients that still send it; a caller can no
+    // longer choose a privileged role. @NotNull is retained so the request shape is
+    // unchanged for current clients.
     @NotNull(message = "Role is required")
     private Role role;
 
-    // Only required when role = STUDENT
+    // Required for every public registration (all public registrations are students).
     private String indexNumber;
 }

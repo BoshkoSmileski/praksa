@@ -6,6 +6,8 @@ import com.praksa.model.Thesis;
 import com.praksa.model.User;
 import com.praksa.model.enums.NotificationType;
 import com.praksa.model.enums.Role;
+import com.praksa.exception.ResourceNotFoundException;
+import com.praksa.exception.UnauthorizedException;
 import com.praksa.repository.NotificationRepository;
 import com.praksa.repository.UserRepository;
 import com.praksa.security.SecurityUtils;
@@ -92,10 +94,115 @@ public class NotificationServiceImpl implements NotificationService {
     @Override
     @Transactional(readOnly = true)
     public List<NotificationResponse> getUnsentNotifications() {
+        // BUG-19: this endpoint exposes system-wide unsent notifications, so it is an
+        // operational/oversight view restricted to STUDENT_SERVICE. Authorization runs
+        // BEFORE any repository query — an unauthorized caller never reaches the DB.
+        requireRole(securityUtils.getCurrentUser(), Role.STUDENT_SERVICE);
         return notificationRepository.findByIsSentFalse()
                 .stream()
                 .map(NotificationResponse::from)
                 .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public int retryUnsentNotifications(int batchSize, java.time.OffsetDateTime createdBefore) {
+        // Bounded, oldest-first page of still-unsent rows old enough to have cleared the
+        // normal flow's original async send. This method only READS notifications; the
+        // actual write (marking isSent=true) happens inside EmailService.sendAsync in its
+        // own transaction, on success only.
+        List<Notification> unsent = notificationRepository
+                .findByIsSentFalseAndCreatedAtBeforeOrderByCreatedAtAsc(
+                        createdBefore, org.springframework.data.domain.PageRequest.of(0, batchSize));
+
+        if (unsent.isEmpty()) {
+            return 0;
+        }
+
+        int dispatched = 0;
+        for (Notification notification : unsent) {
+            try {
+                // Rebuild the email from the persisted row while the session is open, then
+                // hand PRIMITIVES to the async layer — exactly as the normal notify() flow
+                // does — so the async thread never touches a lazy JPA field. We reuse the
+                // same subject/body builders (single source of truth for content).
+                //
+                // NOTE: the original custom message (if any) is not persisted on the row, so
+                // a retry uses the type's default body. See the P2.6 handoff note.
+                NotificationType type = NotificationType.valueOf(notification.getType());
+                User recipient = notification.getUser();
+                Thesis thesis = notification.getThesis();
+
+                UUID notificationId = notification.getId();
+                String recipientEmail = recipient.getEmail();
+                String subject = buildSubject(type, thesis);
+                String body = buildBody(recipient, thesis, type, type.getDefaultBody());
+
+                // Delegate to the SAME async delivery path. No new Notification row is created;
+                // EmailService owns the mail-enabled guard, the send, and the mark-sent write.
+                emailService.sendAsync(notificationId, recipientEmail, subject, body);
+                dispatched++;
+            } catch (Exception e) {
+                // Failure isolation: a single bad row (e.g. an unparseable type or a missing
+                // recipient) must not abort the rest of the batch.
+                log.error("Retry: could not dispatch notification {} (type={}): {}",
+                        notification.getId(), notification.getType(), e.getMessage());
+            }
+        }
+
+        log.info("Retry: dispatched {} of {} eligible unsent notification(s)", dispatched, unsent.size());
+        return dispatched;
+    }
+
+    @Override
+    @Transactional
+    public NotificationResponse markAsRead(UUID notificationId) {
+        // P3.6 — ownership is enforced SERVER-SIDE from the authenticated principal.
+        // The caller-supplied id is never trusted as proof of ownership.
+        User currentUser = securityUtils.getCurrentUser();
+
+        // 1. Load the notification (404 if it does not exist).
+        Notification notification = notificationRepository.findById(notificationId)
+                .orElseThrow(() -> new ResourceNotFoundException("Notification not found"));
+
+        // 2. Verify it belongs to the current user (403 otherwise). getId() on the LAZY
+        //    user proxy is safe — it does not trigger initialization.
+        if (!notification.getUser().getId().equals(currentUser.getId())) {
+            throw new UnauthorizedException("You cannot modify another user's notification");
+        }
+
+        // 3. Idempotent mark-read. Only write when it actually changes, so an already-read
+        //    notification is a clean no-op (no error, no duplicate row). NOTHING else is
+        //    touched: isSent/sentAt/type/recipient/thesis are all left exactly as they were,
+        //    and no email is triggered.
+        if (!notification.isRead()) {
+            notification.setRead(true);
+            notificationRepository.save(notification);
+        }
+
+        return NotificationResponse.from(notification);
+    }
+
+    @Override
+    @Transactional
+    public int markAllAsRead() {
+        // User-scoped bulk update: only the authenticated user's unread rows are affected.
+        User currentUser = securityUtils.getCurrentUser();
+        return notificationRepository.markAllReadByUser(currentUser);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public long getUnreadCount() {
+        // User-scoped: only the authenticated user's own unread notifications are counted.
+        User currentUser = securityUtils.getCurrentUser();
+        return notificationRepository.countByUserAndIsReadFalse(currentUser);
+    }
+
+    private void requireRole(User user, Role required) {
+        if (user.getRole() != required) {
+            throw new UnauthorizedException("This action requires role: " + required);
+        }
     }
 
     // -------------------------------------------------------------------------

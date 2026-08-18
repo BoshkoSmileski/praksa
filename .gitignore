@@ -2,6 +2,12 @@ HELP.md
 target/
 .mvn/wrapper/maven-wrapper.jar
 
+### Local secret / config overrides (never commit) ###
+# Loaded via spring.config.import in application.properties. Holds real SMTP
+# credentials and production secret overrides for local development.
+application-local.properties
+.env
+
 ### Uploaded files (PDFs) ###
 uploads/
 

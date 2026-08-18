@@ -1,0 +1,51 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Local secret / configuration overrides — TEMPLATE (safe to commit).
+#
+# Usage:
+#   1. Copy this file to  application-local.properties  (in the project root,
+#      next to pom.xml). That copy is git-ignored and is loaded automatically
+#      via  spring.config.import  in application.properties.
+#   2. Fill in the placeholders below with REAL values.
+#   3. Never commit the copy. Never put real secrets in this .example file.
+#
+# Alternatively, set the equivalent environment variables instead of using this
+# file (env vars take precedence). The SMTP provider is configuration, not code:
+# any SMTP server works (Gmail, Mailtrap, a university relay, ...).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─── Enable real email delivery ───────────────────────────────────────────────
+# Leave email disabled (the default) and notifications are recorded in-app only,
+# with is_sent=false. Set to true to actually send via the SMTP settings below.
+app.mail.enabled=true
+
+# ─── SMTP settings ────────────────────────────────────────────────────────────
+# Example values below are Gmail's; replace host/port for another provider.
+spring.mail.host=smtp.example.org
+spring.mail.port=587
+spring.mail.username=CHANGE_ME@example.org
+spring.mail.password=CHANGE_ME_SMTP_APP_PASSWORD
+spring.mail.properties.mail.smtp.auth=true
+spring.mail.properties.mail.smtp.starttls.enable=true
+
+# Optional: override the From address (defaults to spring.mail.username).
+# app.mail.from=no-reply@example.org
+
+# ─── Application secrets (REQUIRED for local startup) ─────────────────────────
+# BUG-15: the tracked application.properties NO LONGER ships inline dev defaults for
+# these two values. The application WILL NOT START unless you provide them here (or via
+# the equivalent environment variables). Fill in the placeholders with your own values.
+#
+# JWT_SECRET — local signing key for the tokens the app mints itself (login/register).
+#              Any long random string is fine for local development.
+jwt.secret=CHANGE_ME_LONG_RANDOM_LOCAL_DEV_JWT_SECRET
+
+# SPRING_DATASOURCE_PASSWORD — password for your local PostgreSQL database.
+spring.datasource.password=CHANGE_ME_LOCAL_DB_PASSWORD
+
+# ─── External auth (OPTIONAL — only when auth.external-enabled=true) ───────────
+# Leave external auth off (the default) and you can ignore this whole block.
+# When you turn it on, incoming tokens are verified with THIS key, which is separate
+# from jwt.secret above. If auth.external-enabled=true and this key is blank, startup
+# fails fast — it never falls back to the local jwt.secret.
+# auth.external-enabled=true
+# auth.external-jwt-secret=CHANGE_ME_EXTERNAL_PROVIDER_SIGNING_KEY

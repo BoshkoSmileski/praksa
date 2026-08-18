@@ -32,6 +32,8 @@ public enum NotificationType {
     COMMITTEE_REVIEW_ACCEPTED("Committee Review Accepted", "The committee review period is complete. Defense scheduling can proceed."),
 
     // Defense
+    DEFENSE_ELIGIBILITY_VERIFIED("Defense Eligibility Verified", "Student Service has verified that you meet the defense conditions. You may now request your thesis defense."),
+    DEFENSE_REQUESTED("Defense Requested", "A student has requested a thesis defense. Please review the request and schedule the defense (room, date, and time)."),
     DEFENSE_SCHEDULED("Defense Scheduled", "Your thesis defense has been scheduled. Check the details and prepare your documents."),
     DEFENSE_CANCELLED("Defense Cancelled", "Your thesis defense has been cancelled. A new date will be scheduled."),
     DEFENSE_REMINDER("Defense Reminder — Tomorrow", "Reminder: your thesis defense is scheduled within 24 hours."),

@@ -45,13 +45,16 @@ public class DataInitializer implements ApplicationRunner {
 
         log.info("DataInitializer: seeding test users...");
 
-        createUser("Test Student",    "student@test.com",   Role.STUDENT,   "2024/001");
-        createUser("Test Mentor",     "mentor@test.com",    Role.MENTOR,    null);
-        createUser("Test Mentor 2",   "mentor2@test.com",   Role.MENTOR,    null);
-        createUser("Test Mentor 3",   "mentor3@test.com",   Role.MENTOR,    null);
-        createUser("Test Service",    "service@test.com",   Role.STUDENT_SERVICE, null);
-        createUser("Test Committee",  "committee@test.com", Role.COMMITTEE, null);
-        createUser("Test Archive",    "archive@test.com",   Role.ARCHIVE,   null);
+        // Seed the demo student with 240 credits (> 200) so the 200-credit thesis
+        // gate passes out of the box. Lower this via PATCH /api/users/{id}/credits
+        // (as STUDENT_SERVICE) to demo the rejection path. Non-student roles get null.
+        createUser("Test Student",    "student@test.com",   Role.STUDENT,   "2024/001", 240);
+        createUser("Test Mentor",     "mentor@test.com",    Role.MENTOR,    null, null);
+        createUser("Test Mentor 2",   "mentor2@test.com",   Role.MENTOR,    null, null);
+        createUser("Test Mentor 3",   "mentor3@test.com",   Role.MENTOR,    null, null);
+        createUser("Test Service",    "service@test.com",   Role.STUDENT_SERVICE, null, null);
+        createUser("Test Committee",  "committee@test.com", Role.COMMITTEE, null, null);
+        createUser("Test Archive",    "archive@test.com",   Role.ARCHIVE,   null, null);
 
         log.info("""
 
@@ -71,13 +74,14 @@ public class DataInitializer implements ApplicationRunner {
                 """);
     }
 
-    private void createUser(String fullName, String email, Role role, String indexNumber) {
+    private void createUser(String fullName, String email, Role role, String indexNumber, Integer credits) {
         User user = User.builder()
                 .fullName(fullName)
                 .email(email)
                 .passwordHash(passwordEncoder.encode(DEFAULT_PASSWORD))
                 .role(role)
                 .indexNumber(indexNumber)
+                .credits(credits)
                 .build();
         userRepository.save(user);
     }

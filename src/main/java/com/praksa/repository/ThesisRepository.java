@@ -31,11 +31,33 @@ public interface ThesisRepository extends JpaRepository<Thesis, UUID> {
     Optional<Thesis> findByArchiveRegistrationNumber(String registrationNumber);
 
     /**
-     * Theses still in COMMITTEE_REVIEW whose review period started before the cutoff.
-     * Used by the auto-advance scheduled job.
+     * Theses still in COMMITTEE_REVIEW whose review period started at or before the cutoff.
+     * Used by the auto-advance scheduled job. The comparison is inclusive (&lt;=) so a review
+     * that started exactly 5 business days ago is treated as stale (Item #9: "exactly 5
+     * working days elapsed → automatically accepted").
      */
     @Query("SELECT t FROM Thesis t WHERE t.status = 'COMMITTEE_REVIEW' " +
            "AND t.committeeReviewStartedAt IS NOT NULL " +
-           "AND t.committeeReviewStartedAt < :cutoff")
+           "AND t.committeeReviewStartedAt <= :cutoff")
     List<Thesis> findStaleCommitteeReviews(java.time.OffsetDateTime cutoff);
+
+    /**
+     * Theses on whose committee the given user (typically MENTOR-role) holds a seat.
+     * Used to scope the Committee page for professors who serve on a formal committee.
+     */
+    @Query("SELECT DISTINCT t FROM Thesis t JOIN CommitteeMember c ON c.thesis = t " +
+           "WHERE c.professor = :professor")
+    List<Thesis> findByCommitteeMember(User professor);
+
+    /**
+     * Theses whose submission deadline has already passed while they are still in a
+     * pre-application status (i.e. the formal application was never successfully
+     * submitted in time). Used by the read-only expired-deadline reporting job.
+     * Legacy rows with a null deadline are excluded (deadline IS NOT NULL by the
+     * &lt; comparison), so they never appear here.
+     */
+    @Query("SELECT t FROM Thesis t WHERE t.submissionDeadline IS NOT NULL " +
+           "AND t.submissionDeadline < :cutoff AND t.status IN :statuses")
+    List<Thesis> findExpiredPendingApplications(java.time.OffsetDateTime cutoff,
+                                                java.util.Collection<ThesisStatus> statuses);
 }
