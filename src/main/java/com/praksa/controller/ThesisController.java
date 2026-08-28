@@ -2,6 +2,7 @@ package com.praksa.controller;
 
 import com.praksa.dto.ApiResponse;
 import com.praksa.dto.thesis.*;
+import com.praksa.service.DeadlineExtensionService;
 import com.praksa.service.ThesisService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -22,6 +23,7 @@ import java.util.UUID;
 public class ThesisController {
 
     private final ThesisService thesisService;
+    private final DeadlineExtensionService deadlineExtensionService;
 
     @Operation(
         summary = "Create thesis (Step 1)",
@@ -65,7 +67,8 @@ public class ThesisController {
         summary = "Get theses for the Defenses view",
         description = "Returns theses that have (or are ready for) a defense, scoped by role. " +
                       "STUDENT: own theses. MENTOR: assigned theses (incl. those they serve on as committee). " +
-                      "COMMITTEE: theses in DEFENSE_SCHEDULED/ARCHIVED. STUDENT_SERVICE: all defense-related theses."
+                      "COMMITTEE: theses in DEFENSE_SCHEDULED/ARCHIVED/DEFENSE_FAILED. " +
+                      "STUDENT_SERVICE: all defense-related theses."
     )
     @GetMapping("/defenses")
     public ResponseEntity<ApiResponse<List<ThesisResponse>>> getDefenseTheses() {
@@ -140,7 +143,7 @@ public class ThesisController {
         summary = "Submit mentor request (Step 2)",
         description = "Student picks a mentor and sends a topic request. " +
                       "Allowed when status is TOPIC_SELECTION or MENTOR_REJECTED_TOPIC. " +
-                      "Mentor must have fewer than 10 active theses. Requires role: STUDENT."
+                      "Mentor must have fewer than 15 active theses. Requires role: STUDENT."
     )
     @PatchMapping("/{id}/mentor-request")
     public ResponseEntity<ApiResponse<ThesisResponse>> submitMentorRequest(
@@ -259,5 +262,55 @@ public class ThesisController {
             @PathVariable UUID id,
             @Valid @RequestBody DefenseEligibilityRequest request) {
         return ResponseEntity.ok(ApiResponse.ok(thesisService.verifyDefenseEligibility(id, request)));
+    }
+
+    @Operation(
+        summary = "Request a defense deadline extension",
+        description = "Official faculty procedure: the STUDENT who owns the thesis requests an extension of " +
+                      "the defense deadline (up to 15 additional days) with a written reason. Creates a PENDING " +
+                      "request awaiting a Student Service decision — never mutates the deadline directly. " +
+                      "Requires role: STUDENT and thesis ownership; the thesis must already have a defense " +
+                      "deadline set (defense eligibility verified)."
+    )
+    @ApiResponses({
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Request created, status = PENDING"),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid reason/requestedDays, no defense deadline set, or a request is already pending/approved"),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Caller is not the thesis owner or not a STUDENT")
+    })
+    @PostMapping("/{id}/deadline-extension-request")
+    public ResponseEntity<ApiResponse<DeadlineExtensionResponse>> submitDeadlineExtensionRequest(
+            @PathVariable UUID id,
+            @Valid @RequestBody DeadlineExtensionCreateRequest request) {
+        return ResponseEntity.ok(ApiResponse.ok(deadlineExtensionService.submitDeadlineExtensionRequest(id, request)));
+    }
+
+    @Operation(
+        summary = "Decide a defense deadline extension request",
+        description = "Student Service approves or rejects the thesis's current PENDING deadline extension " +
+                      "request. Approval extends the defense deadline by EXACTLY the requested number of days " +
+                      "(server-computed). Rejection requires a reason and leaves the deadline unchanged. Neither " +
+                      "decision changes the thesis's workflow status. Requires role: STUDENT_SERVICE."
+    )
+    @ApiResponses({
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Decision recorded"),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "No pending request exists, or a rejection reason is missing"),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Caller is not STUDENT_SERVICE")
+    })
+    @PatchMapping("/{id}/deadline-extension-decision")
+    public ResponseEntity<ApiResponse<DeadlineExtensionResponse>> decideDeadlineExtensionRequest(
+            @PathVariable UUID id,
+            @Valid @RequestBody DeadlineExtensionDecisionRequest request) {
+        return ResponseEntity.ok(ApiResponse.ok(deadlineExtensionService.decideDeadlineExtensionRequest(id, request)));
+    }
+
+    @Operation(
+        summary = "Get deadline extension request history",
+        description = "Full history of deadline extension requests for this thesis (PENDING/APPROVED/REJECTED), " +
+                      "newest first. Thesis-scoped read access — same policy as the other thesis-level reads."
+    )
+    @GetMapping("/{id}/deadline-extension-requests")
+    public ResponseEntity<ApiResponse<List<DeadlineExtensionResponse>>> getDeadlineExtensionRequests(
+            @PathVariable UUID id) {
+        return ResponseEntity.ok(ApiResponse.ok(deadlineExtensionService.getDeadlineExtensionRequests(id)));
     }
 }

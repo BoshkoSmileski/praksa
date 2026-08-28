@@ -5,6 +5,7 @@ import com.praksa.model.Defense;
 import com.praksa.model.DefenseResult;
 import com.praksa.model.Thesis;
 import com.praksa.model.User;
+import com.praksa.model.enums.DefenseRequestStatus;
 import com.praksa.model.enums.MemberRole;
 import com.praksa.model.enums.MentorDecision;
 import com.praksa.model.enums.NotificationType;
@@ -18,6 +19,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -134,22 +136,28 @@ class ThesisWorkflowIntegrationTest extends AbstractWorkflowIntegrationTest {
         assertEquals(ThesisStatus.PENDING_DEFENSE_SCHEDULING, reload(thesisId).getStatus());
         assertEquals(1, notificationCount(a.student, NotificationType.DEFENSE_ELIGIBILITY_VERIFIED, thesisId));
 
-        // 16. Student requests defense (signal only — no status change, no Defense row yet)
-        requestDefense(a.student, thesisId);
+        // 16. Student proposes the actual room/date/time → DefenseRequest PENDING, no
+        //     Defense row yet, no status change (the request itself never schedules).
+        OffsetDateTime when = OffsetDateTime.now().plusDays(10);
+        UUID requestId = requestDefense(a.student, thesisId, "Amphitheater A", when);
         assertEquals(ThesisStatus.PENDING_DEFENSE_SCHEDULING, reload(thesisId).getStatus());
         assertTrue(defenseRepository.findByThesis(reload(thesisId)).isEmpty(),
-                "a defense request must NOT create a Defense row");
+                "a PENDING defense request must NOT create a Defense row");
         assertEquals(1, notificationCount(a.service, NotificationType.DEFENSE_REQUESTED, thesisId));
 
-        // 17. Service schedules the defense → DEFENSE_SCHEDULED, Defense row persisted
-        OffsetDateTime when = OffsetDateTime.now().plusDays(10);
-        UUID defenseId = scheduleDefense(a.service, thesisId, "Amphitheater A", when);
+        // 17. Service approves the proposal → DEFENSE_SCHEDULED, Defense row persisted with
+        //     the exact room/time copied from the request.
+        approveDefenseRequest(a.service, thesisId);
         assertEquals(ThesisStatus.DEFENSE_SCHEDULED, reload(thesisId).getStatus());
-        Defense defense = defenseRepository.findById(defenseId).orElseThrow();
+        Defense defense = defenseRepository.findByThesisAndIsCancelledFalse(reload(thesisId)).orElseThrow();
+        UUID defenseId = defense.getId();
         assertEquals("Amphitheater A", defense.getRoom());
+        assertTrue(when.isEqual(defense.getScheduledAt()), "same instant (Postgres round-trips timestamptz as UTC)");
         assertEquals(thesisId, defense.getThesis().getId());
         assertTrue(!defense.isCancelled());
         assertEquals(1, notificationCount(a.student, NotificationType.DEFENSE_SCHEDULED, thesisId));
+        assertEquals(DefenseRequestStatus.APPROVED,
+                defenseRequestRepository.findById(requestId).orElseThrow().getStatus());
 
         // 18. A seated committee member records the grade → ARCHIVED
         UUID resultId = recordResult(a.professorA, thesisId, defenseId, 9);
@@ -272,6 +280,57 @@ class ThesisWorkflowIntegrationTest extends AbstractWorkflowIntegrationTest {
         archiveValidate(a.archive, thesisId, true, null);
         serviceValidate(a.service, thesisId, true, null);
         assertEquals(ThesisStatus.IN_PROGRESS, reload(thesisId).getStatus());
+    }
+
+    // =========================================================================
+    // TEST 4 — GRADE 5 = DEFENSE_FAILED: real end-to-end, not archived, student can reapply
+    // =========================================================================
+
+    @Test
+    @DisplayName("Grade 5 over the real stack: thesis moves to DEFENSE_FAILED (not ARCHIVED), " +
+                 "receives no archive metadata, notifies the student once, and the student can " +
+                 "immediately reapply — while a genuinely active thesis still blocks reapplication")
+    void grade5_realStack_defenseFailedAndStudentCanReapply() throws Exception {
+        Actors a = newActors();
+        OffsetDateTime when = OffsetDateTime.now().plusDays(10);
+        UUID thesisId = advanceToDefenseScheduled(a, "Room 101", when);
+
+        Defense defense = defenseRepository.findByThesisAndIsCancelledFalse(reload(thesisId)).orElseThrow();
+        UUID defenseId = defense.getId();
+
+        // A seated committee member grades 5 — the official "not defended" outcome.
+        UUID resultId = recordResult(a.professorA, thesisId, defenseId, 5);
+
+        // Status is DEFENSE_FAILED, never ARCHIVED.
+        Thesis thesis = reload(thesisId);
+        assertEquals(ThesisStatus.DEFENSE_FAILED, thesis.getStatus());
+
+        // NO archive metadata was assigned for a failed defense.
+        assertNull(thesis.getArchiveRegistrationNumber());
+        assertNull(thesis.getArchiveDate());
+
+        // The DefenseResult (grade 5) and the Defense row are both preserved untouched.
+        DefenseResult result = defenseResultRepository.findById(resultId).orElseThrow();
+        assertEquals(5, result.getGrade());
+        assertTrue(defenseRepository.findById(defenseId).isPresent());
+
+        // Exactly one notification — DEFENSE_FAILED_CAN_REAPPLY — and NOT the archive-success pair.
+        assertEquals(1, notificationCount(a.student, NotificationType.DEFENSE_FAILED_CAN_REAPPLY, thesisId));
+        assertEquals(0, notificationCount(a.student, NotificationType.THESIS_GRADED, thesisId));
+        assertEquals(0, notificationCount(a.student, NotificationType.THESIS_ARCHIVED, thesisId));
+
+        // Item D — reapplication: DEFENSE_FAILED does not count as an active thesis, so the
+        // SAME student can immediately open a brand-new application.
+        UUID newThesisId = createThesis(a.student, "A reworked thesis after the failed defense");
+        assertEquals(ThesisStatus.PENDING_ELIGIBILITY_CHECK, reload(newThesisId).getStatus());
+        // The old DEFENSE_FAILED row is left completely untouched as historical/audit data.
+        assertEquals(ThesisStatus.DEFENSE_FAILED, reload(thesisId).getStatus());
+
+        // Item E — the active-thesis rule is NOT globally weakened: the brand-new thesis the
+        // student just opened IS active (PENDING_ELIGIBILITY_CHECK), so a third attempt is
+        // correctly rejected.
+        doPost("/api/theses", a.student, java.util.Map.of("title", "A third thesis, should be blocked"))
+                .andExpect(status().isBadRequest());
     }
 
     // -------------------------------------------------------------------------

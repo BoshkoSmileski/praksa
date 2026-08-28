@@ -33,6 +33,8 @@ public class ThesisResponse {
     private final String serviceComment;
 
     private final OffsetDateTime submissionDeadline;
+    private final OffsetDateTime applicationSubmittedAt;
+    private final OffsetDateTime defenseDeadline;
     private final OffsetDateTime createdAt;
     private final OffsetDateTime updatedAt;
 
@@ -69,6 +71,8 @@ public class ThesisResponse {
         this.serviceComment = thesis.getServiceComment();
 
         this.submissionDeadline = thesis.getSubmissionDeadline();
+        this.applicationSubmittedAt = thesis.getApplicationSubmittedAt();
+        this.defenseDeadline = thesis.getDefenseDeadline();
         this.createdAt = thesis.getCreatedAt();
         this.updatedAt = thesis.getUpdatedAt();
 

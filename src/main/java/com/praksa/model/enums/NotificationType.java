@@ -6,42 +6,60 @@ import lombok.Getter;
 public enum NotificationType {
 
     // Eligibility
-    ELIGIBILITY_APPROVED("Eligibility Approved", "Your eligibility check has been approved. You can now select a topic and mentor."),
-    ELIGIBILITY_REJECTED("Eligibility Rejected", "Your eligibility check was rejected. Please contact the student service."),
+    ELIGIBILITY_APPROVED("Условите се исполнети", "Проверката на условите за подобност е одобрена. Сега можете да изберете тема и ментор."),
+    ELIGIBILITY_REJECTED("Условите не се исполнети", "Проверката на условите за подобност е одбиена. Ве молиме контактирајте ја Студентската служба."),
 
     // Mentor workflow
-    MENTOR_REQUEST_RECEIVED("New Thesis Topic Request", "A student has sent you a thesis topic request. Please review it."),
-    MENTOR_ACCEPTED_TOPIC("Topic Accepted", "Your mentor has accepted your thesis topic. Please submit the formal application."),
-    MENTOR_REQUESTED_CHANGES("Mentor Requested Changes", "Your mentor has requested changes to your proposal. Review the feedback and resubmit."),
-    MENTOR_REJECTED_TOPIC("Topic Rejected", "Your mentor has rejected your thesis topic. You may choose a different topic or mentor."),
-    STUDENT_RESUBMITTED_PROPOSAL("Student Resubmitted Proposal", "A student has revised and resubmitted their thesis proposal. Please review it."),
+    MENTOR_REQUEST_RECEIVED("Ново барање за тема на дипломска работа", "Студент ви испрати барање за тема на дипломска работа. Ве молиме разгледајте го."),
+    MENTOR_ACCEPTED_TOPIC("Темата е прифатена", "Менторот ја прифати темата на вашата дипломска работа. Ве молиме поднесете ја формалната пријава."),
+    MENTOR_REQUESTED_CHANGES("Менторот побара измени", "Менторот побара измени на вашиот предлог. Разгледајте ги забелешките и поднесете повторно."),
+    MENTOR_REJECTED_TOPIC("Темата е одбиена", "Менторот ја одби темата на вашата дипломска работа. Можете да изберете друга тема или ментор."),
+    STUDENT_RESUBMITTED_PROPOSAL("Студентот повторно поднесе предлог", "Студентот го ревидираше и повторно го поднесе предлогот за дипломска работа. Ве молиме разгледајте го."),
 
     // Application validation (two-stage: Archive then Student Service)
-    APPLICATION_PENDING_ARCHIVE("Thesis Application Awaiting Archive Validation", "A thesis application is awaiting your validation."),
-    APPLICATION_REJECTED_BY_ARCHIVE("Application Rejected by Archive", "Your thesis application was rejected by the Archive. Please review the comments and resubmit."),
-    APPLICATION_PENDING_SERVICE("Thesis Application Awaiting Student Service Validation", "A thesis application is awaiting your validation."),
-    APPLICATION_REJECTED_BY_SERVICE("Application Rejected by Student Service", "Your thesis application was rejected by Student Service. Please review the comments and resubmit."),
+    APPLICATION_PENDING_ARCHIVE("Пријавата чека валидација од Архивата", "Пријава за дипломска работа чека ваша валидација."),
+    APPLICATION_REJECTED_BY_ARCHIVE("Пријавата е одбиена од Архивата", "Вашата пријава за дипломска работа е одбиена од Архивата. Ве молиме разгледајте ги коментарите и поднесете повторно."),
+    APPLICATION_PENDING_SERVICE("Пријавата чека валидација од Студентската служба", "Пријава за дипломска работа чека ваша валидација."),
+    APPLICATION_REJECTED_BY_SERVICE("Пријавата е одбиена од Студентската служба", "Вашата пријава за дипломска работа е одбиена од Студентската служба. Ве молиме разгледајте ги коментарите и поднесете повторно."),
 
     // Application and progress
-    APPLICATION_VALIDATED("Application Validated", "Your thesis application has been validated. You can now begin working on your thesis."),
-    FINAL_VERSION_SUBMITTED("Final Version Submitted", "A student has submitted their final thesis version. Please review it."),
-    MENTOR_APPROVED_THESIS("Thesis Approved by Mentor", "Your thesis has been approved by your mentor and sent to the committee."),
+    APPLICATION_VALIDATED("Пријавата е валидирана", "Вашата пријава за дипломска работа е валидирана. Сега можете да започнете со изработка на дипломската работа."),
+    FINAL_VERSION_SUBMITTED("Поднесена е финалната верзија", "Студентот ја поднесе финалната верзија на дипломската работа. Ве молиме разгледајте ја."),
+    MENTOR_APPROVED_THESIS("Дипломската работа е одобрена од менторот", "Вашата дипломска работа е одобрена од менторот и е испратена до комисијата."),
 
     // Committee
-    COMMITTEE_FORMED("Committee Formed", "You have been assigned to a thesis defense committee."),
-    COMMITTEE_REVIEW_ACCEPTED("Committee Review Accepted", "The committee review period is complete. Defense scheduling can proceed."),
+    COMMITTEE_FORMED("Формирана е комисија", "Назначени сте во комисија за одбрана на дипломска работа."),
+    COMMITTEE_REVIEW_ACCEPTED("Разгледувањето од комисијата е прифатено", "Периодот на разгледување од комисијата заврши. Може да продолжи закажувањето на одбраната."),
 
     // Defense
-    DEFENSE_ELIGIBILITY_VERIFIED("Defense Eligibility Verified", "Student Service has verified that you meet the defense conditions. You may now request your thesis defense."),
-    DEFENSE_REQUESTED("Defense Requested", "A student has requested a thesis defense. Please review the request and schedule the defense (room, date, and time)."),
-    DEFENSE_SCHEDULED("Defense Scheduled", "Your thesis defense has been scheduled. Check the details and prepare your documents."),
-    DEFENSE_CANCELLED("Defense Cancelled", "Your thesis defense has been cancelled. A new date will be scheduled."),
-    DEFENSE_REMINDER("Defense Reminder — Tomorrow", "Reminder: your thesis defense is scheduled within 24 hours."),
-    COMMITTEE_REVIEW_AUTO_ADVANCED("Committee Review Period Expired", "The committee did not respond within 5 business days. The review has been automatically marked as accepted."),
+    DEFENSE_ELIGIBILITY_VERIFIED("Условите за одбрана се потврдени", "Студентската служба потврди дека ги исполнувате условите за одбрана. Сега можете да предложите просторија, датум и време за одбрана."),
+    DEFENSE_REQUESTED("Поднесено е барање за одбрана", "Студентот предложи просторија, датум и време за одбрана на дипломската работа. Ве молиме разгледајте го предлогот и одобрете го или одбијте го."),
+    DEFENSE_REQUEST_REJECTED("Барањето за одбрана е одбиено", "Студентската служба не го одобри предложениот термин, просторија и датум за одбрана. Разгледајте ја причината подолу и поднесете нов предлог."),
+    DEFENSE_SCHEDULED("Одбраната е закажана", "Одбраната на вашата дипломска работа е закажана. Проверете ги деталите и подгответе ги документите."),
+    DEFENSE_CANCELLED("Одбраната е откажана", "Одбраната на вашата дипломска работа е откажана. Ќе биде закажан нов термин."),
+    DEFENSE_REMINDER("Потсетник за одбрана — утре", "Потсетник: одбраната на вашата дипломска работа е закажана во следните 24 часа."),
+    COMMITTEE_REVIEW_AUTO_ADVANCED("Периодот на разгледување од комисијата истече", "Комисијата не одговори во рок од 5 работни дена. Разгледувањето е автоматски означено како прифатено."),
+
+    // Mentor review deadline (official faculty procedure — 45 days)
+    MENTOR_REVIEW_DEADLINE_EXCEEDED("Истечен рок за преглед од менторот",
+            "Последната поднесена верзија на дипломската работа чека ваш преглед повеќе од "
+                    + "45 дена. Ве молиме прегледајте ја и вратете ја на студентот со коментари."),
 
     // Final result
-    THESIS_GRADED("Thesis Graded", "Your thesis defense grade has been recorded."),
-    THESIS_ARCHIVED("Thesis Archived", "Congratulations! Your thesis has been successfully defended and archived.");
+    THESIS_GRADED("Дипломската работа е оценета", "Оценката од одбраната на вашата дипломска работа е внесена."),
+    THESIS_ARCHIVED("Дипломската работа е архивирана", "Честитки! Вашата дипломска работа е успешно одбранета и архивирана."),
+    DEFENSE_FAILED_CAN_REAPPLY("Одбраната не е положена", "Одбраната на вашата дипломска работа беше оценета со 5 и не е успешно "
+            + "положена. Може да ја преработите темата или да поднесете нова пријава за дипломска работа согласно "
+            + "факултетската процедура."),
+
+    // Deadline extension (official faculty procedure — max 15 additional days)
+    DEADLINE_EXTENSION_REQUESTED("Побарано е продолжување на рокот",
+            "Студентот побара продолжување на рокот за одбрана. Ве молиме разгледајте го "
+                    + "барањето и одобрете го или одбијте го."),
+    DEADLINE_EXTENSION_APPROVED("Продолжувањето на рокот е одобрено",
+            "Вашето барање за продолжување на рокот за одбрана е одобрено."),
+    DEADLINE_EXTENSION_REJECTED("Продолжувањето на рокот е одбиено",
+            "Вашето барање за продолжување на рокот за одбрана е одбиено.");
 
     // Subject line and default body used when sending the email
     private final String subject;

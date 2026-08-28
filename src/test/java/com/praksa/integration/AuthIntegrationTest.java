@@ -132,7 +132,7 @@ class AuthIntegrationTest {
                         .content(objectMapper.writeValueAsString(second)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.success").value(false))
-                .andExpect(jsonPath("$.message").value("Email already in use"));
+                .andExpect(jsonPath("$.message").value("Оваа е-пошта веќе се користи."));
     }
 
     @Test

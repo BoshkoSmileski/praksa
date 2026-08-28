@@ -21,10 +21,10 @@ public class SecurityUtils {
     public User getCurrentUser() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth == null || !auth.isAuthenticated()) {
-            throw new UnauthorizedException("Not authenticated");
+            throw new UnauthorizedException("Не сте најавени.");
         }
         String email = auth.getName();
         return userRepository.findByEmail(email)
-                .orElseThrow(() -> new UnauthorizedException("Authenticated user not found in database"));
+                .orElseThrow(() -> new UnauthorizedException("Најавениот корисник не е пронајден во базата на податоци."));
     }
 }

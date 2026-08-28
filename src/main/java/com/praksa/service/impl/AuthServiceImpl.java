@@ -27,7 +27,7 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public AuthResponse register(RegisterRequest request) {
         if (userRepository.existsByEmail(request.getEmail())) {
-            throw new BadRequestException("Email already in use");
+            throw new BadRequestException("Оваа е-пошта веќе се користи.");
         }
 
         // ─── SECURITY: BUG-2 / P0.2 — public registration is STUDENT-only ───────
@@ -43,10 +43,10 @@ public class AuthServiceImpl implements AuthService {
         // A STUDENT must have a unique, non-blank index number. Because every public
         // registration is now a STUDENT, this check always applies.
         if (request.getIndexNumber() == null || request.getIndexNumber().isBlank()) {
-            throw new BadRequestException("Index number is required for students");
+            throw new BadRequestException("Индексниот број е задолжителен за студенти.");
         }
         if (userRepository.existsByIndexNumber(request.getIndexNumber())) {
-            throw new BadRequestException("Index number already in use");
+            throw new BadRequestException("Овој индексен број веќе се користи.");
         }
 
         User user = User.builder()
@@ -71,7 +71,7 @@ public class AuthServiceImpl implements AuthService {
         );
 
         User user = userRepository.findByEmail(request.getEmail())
-                .orElseThrow(() -> new BadRequestException("User not found"));
+                .orElseThrow(() -> new BadRequestException("Корисникот не е пронајден."));
 
         String token = jwtUtil.generateToken(user.getEmail(), user.getRole().name());
         return new AuthResponse(token, user.getId(), user.getEmail(), user.getFullName(), user.getRole());

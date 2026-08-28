@@ -36,6 +36,12 @@ public enum ThesisStatus {
     PENDING_DEFENSE_SCHEDULING,
     DEFENSE_SCHEDULED,
 
-    // Step 12: Archived
+    // Step 12: Defense outcome — grade 5 fails the defense, grades 6-10 archive it.
+    // DEFENSE_FAILED is produced only by DefenseResultServiceImpl.recordResult on a grade
+    // of 5 (official faculty rule: "grade 5 = not defended"). It receives NO archive
+    // registration number/date and is NOT an active status (see
+    // ThesisServiceImpl#isActiveStatus) — the student may rework the topic or submit a
+    // brand-new application through the existing createThesis flow.
+    DEFENSE_FAILED,
     ARCHIVED
 }

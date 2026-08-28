@@ -110,7 +110,7 @@ class AuthServiceRegistrationTest {
 
         BadRequestException ex = assertThrows(BadRequestException.class,
                 () -> authService.register(request(Role.STUDENT)));
-        assertEquals("Email already in use", ex.getMessage());
+        assertEquals("Оваа е-пошта веќе се користи.", ex.getMessage());
         verify(userRepository, never()).save(any());
     }
 
@@ -124,7 +124,7 @@ class AuthServiceRegistrationTest {
 
         BadRequestException ex = assertThrows(BadRequestException.class,
                 () -> authService.register(noIndex));
-        assertEquals("Index number is required for students", ex.getMessage());
+        assertEquals("Индексниот број е задолжителен за студенти.", ex.getMessage());
         verify(userRepository, never()).save(any());
     }
 
@@ -148,7 +148,7 @@ class AuthServiceRegistrationTest {
 
         BadRequestException ex = assertThrows(BadRequestException.class,
                 () -> authService.register(request(Role.STUDENT)));
-        assertEquals("Index number already in use", ex.getMessage());
+        assertEquals("Овој индексен број веќе се користи.", ex.getMessage());
         verify(userRepository, never()).save(any());
     }
 }

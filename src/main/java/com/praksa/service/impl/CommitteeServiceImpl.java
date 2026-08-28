@@ -58,18 +58,24 @@ public class CommitteeServiceImpl implements CommitteeService {
 
         // Only the assigned mentor of this specific thesis can propose
         if (!mentor.getId().equals(thesis.getMentor().getId())) {
-            throw new UnauthorizedException("Only the assigned mentor can propose a committee");
+            throw new UnauthorizedException("Само назначениот ментор може да предложи комисија.");
         }
 
         // Prevent re-proposing if committee already exists
         if (committeeRepository.countByThesis(thesis) > 0) {
-            throw new BadRequestException("A committee has already been proposed for this thesis");
+            throw new BadRequestException("Веќе е предложена комисија за оваа дипломска работа.");
         }
+
+        List<UUID> professorIds = request.getProfessorIds();
+        UUID externalId = request.getExternalProfessorId();
+        validateProposalComposition(professorIds, externalId);
 
         List<CommitteeMember> members = new ArrayList<>();
 
         // 1. Auto-add the mentor as MENTOR_MEMBER.
         //    This is not in the request — it's a business rule enforced here.
+        //    The mentor is always a voting member and can never be the external seat, because
+        //    the mentor is never present in professorIds (see the duplicate-mentor check below).
         CommitteeMember mentorMember = CommitteeMember.builder()
                 .thesis(thesis)
                 .professor(mentor)
@@ -78,38 +84,74 @@ public class CommitteeServiceImpl implements CommitteeService {
                 .build();
         members.add(committeeRepository.save(mentorMember));
 
-        // 2. Add the 2 proposed formal members
-        for (UUID professorId : request.getProfessorIds()) {
+        // 2. Add the 2 or 3 proposed formal members. Exactly one of them (matching
+        //    externalId) is flagged as the external non-voting member when 3 are proposed.
+        for (UUID professorId : professorIds) {
             User professor = userRepository.findById(professorId)
-                    .orElseThrow(() -> new ResourceNotFoundException("Professor not found: " + professorId));
+                    .orElseThrow(() -> new ResourceNotFoundException("Професорот не е пронајден: " + professorId));
 
             // Must be a mentor/professor role user
             if (professor.getRole() != Role.MENTOR) {
                 throw new BadRequestException(
-                        professor.getFullName() + " is not a professor and cannot be a committee member");
+                        professor.getFullName() + " не е професор и не може да биде член на комисијата.");
             }
 
-            // Cannot add the thesis mentor again as a formal member
+            // Cannot add the thesis mentor again as a formal member — this also guarantees the
+            // mentor can never be marked as the external non-voting member (the mentor is never
+            // in professorIds, so externalId can never resolve to the mentor).
             if (professor.getId().equals(mentor.getId())) {
-                throw new BadRequestException("The thesis mentor is already a committee member and cannot be added again");
+                throw new BadRequestException("Менторот на дипломската работа веќе е член на комисијата и не може повторно да се додаде.");
             }
 
             // The unique constraint in the DB catches duplicates at the database level,
             // but we check here first to give a clear error message instead of a DB error
             if (committeeRepository.existsByThesisAndProfessor(thesis, professor)) {
-                throw new BadRequestException(professor.getFullName() + " is already on this committee");
+                throw new BadRequestException(professor.getFullName() + " веќе е член на оваа комисија.");
             }
 
+            boolean isExternal = professor.getId().equals(externalId);
             CommitteeMember formalMember = CommitteeMember.builder()
                     .thesis(thesis)
                     .professor(professor)
                     .memberRole(MemberRole.FORMAL_MEMBER)
                     .proposedBy(mentor)
+                    .isExternalNonVoting(isExternal)
                     .build();
             members.add(committeeRepository.save(formalMember));
         }
 
         return members.stream().map(CommitteeMemberResponse::from).toList();
+    }
+
+    /**
+     * Propose-time composition rule (official faculty procedure): 2 proposed professors give a
+     * 3-member committee (mentor + 2 voting) with no external member; 3 proposed professors give
+     * a 4-member committee (mentor + 2 voting + 1 external non-voting) and the caller MUST
+     * designate which one of the 3 is external. Defense-in-depth alongside the DTO's
+     * {@code @Size(min=2,max=3)} — a caller cannot mark an arbitrary professor external without
+     * that id actually being one of the proposed professors.
+     */
+    private void validateProposalComposition(List<UUID> professorIds, UUID externalId) {
+        int size = professorIds == null ? 0 : professorIds.size();
+        if (size == 2) {
+            if (externalId != null) {
+                throw new BadRequestException(
+                        "Комисија со 3 членови (2 дополнителни професори) не може да вклучува надворешен член без право на глас.");
+            }
+        } else if (size == 3) {
+            if (externalId == null) {
+                throw new BadRequestException(
+                        "Комисија со 4 членови (3 дополнителни професори) мора да определи точно еден надворешен член без право на глас.");
+            }
+            if (!professorIds.contains(externalId)) {
+                throw new BadRequestException("Надворешниот член мора да биде еден од предложените професори.");
+            }
+        } else {
+            // Defense-in-depth: the DTO's @Size(min=2,max=3) already rejects this at the
+            // controller boundary via bean validation, but the service layer never relies on
+            // bean validation alone for a business rule.
+            throw new BadRequestException("Мора да предложите 2 или 3 професори.");
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -125,16 +167,18 @@ public class CommitteeServiceImpl implements CommitteeService {
         Thesis thesis = findThesis(thesisId);
         requireStatus(thesis, ThesisStatus.MENTOR_APPROVED);
 
-        // Safety check: ensure exactly 3 members were proposed before approving.
-        // This is the final enforcement of the "exactly 3" rule.
+        // Safety check: ensure 3 or 4 members were proposed before approving.
+        // This is the final enforcement of the "3 or 4" composition rule.
         long memberCount = committeeRepository.countByThesis(thesis);
-        if (memberCount != 3) {
+        if (memberCount != 3 && memberCount != 4) {
             throw new BadRequestException(
-                    "Committee must have exactly 3 members before approval. Current count: " + memberCount);
+                    "Комисијата мора да има 3 или 4 членови пред одобрувањето. Тековен број: " + memberCount);
         }
 
-        // Stamp approved_by and approved_at on all members
         List<CommitteeMember> members = committeeRepository.findByThesis(thesis);
+        validateCommitteeComposition(members, memberCount);
+
+        // Stamp approved_by and approved_at on all members
         for (CommitteeMember m : members) {
             m.setApprovedBy(admin);
             m.setApprovedAt(OffsetDateTime.now());
@@ -156,7 +200,7 @@ public class CommitteeServiceImpl implements CommitteeService {
         // The student is informed with a student-appropriate custom message (the default
         // COMMITTEE_FORMED body is written for the seated members).
         notificationService.notify(thesis.getStudent(), thesis, NotificationType.COMMITTEE_FORMED,
-                "Your thesis defense committee has been formed and the review period has started.");
+                "Формирана е комисијата за одбрана на вашата дипломска работа и започна периодот на разгледување.");
 
         return members.stream().map(CommitteeMemberResponse::from).toList();
     }
@@ -175,16 +219,16 @@ public class CommitteeServiceImpl implements CommitteeService {
         requireStatus(thesis, ThesisStatus.COMMITTEE_REVIEW);
 
         CommitteeMember member = committeeRepository.findById(memberId)
-                .orElseThrow(() -> new ResourceNotFoundException("Committee member not found: " + memberId));
+                .orElseThrow(() -> new ResourceNotFoundException("Членот на комисијата не е пронајден: " + memberId));
 
         // Ensure this member belongs to this thesis
         if (!member.getThesis().getId().equals(thesisId)) {
-            throw new BadRequestException("This committee member does not belong to the specified thesis");
+            throw new BadRequestException("Овој член на комисијата не припаѓа на наведената дипломска работа.");
         }
 
         // Only the professor who IS this committee member can submit their own notes
         if (!member.getProfessor().getId().equals(reviewer.getId())) {
-            throw new UnauthorizedException("You can only submit notes for your own committee membership");
+            throw new UnauthorizedException("Можете да поднесете забелешки само за своето членство во комисијата.");
         }
 
         // Notes can be null (they confirmed with no remarks)
@@ -249,21 +293,50 @@ public class CommitteeServiceImpl implements CommitteeService {
     // PRIVATE HELPERS
     // -------------------------------------------------------------------------
 
+    /**
+     * Approve-time composition rule (official faculty procedure — authoritative final gate,
+     * mirroring the existing "safety check" pattern at this call site): a 3-member committee
+     * must have zero external members (everyone votes); a 4-member committee must have exactly
+     * one external non-voting member; the mentor's seat must always be a voting seat. This is
+     * defense-in-depth against the propose-time validation — it re-derives the rule from the
+     * actual persisted seats rather than trusting that proposeCommittee was the only path that
+     * ever created them.
+     */
+    private void validateCommitteeComposition(List<CommitteeMember> members, long memberCount) {
+        long externalCount = members.stream().filter(CommitteeMember::isExternalNonVoting).count();
+
+        if (memberCount == 3 && externalCount != 0) {
+            throw new BadRequestException(
+                    "Комисија со 3 членови не може да вклучува надворешен член без право на глас. Пронајдени: " + externalCount);
+        }
+        if (memberCount == 4 && externalCount != 1) {
+            throw new BadRequestException(
+                    "Комисија со 4 членови мора да има точно 1 надворешен член без право на глас. Пронајдени: " + externalCount);
+        }
+
+        boolean mentorIsVoting = members.stream()
+                .filter(m -> m.getMemberRole() == MemberRole.MENTOR_MEMBER)
+                .anyMatch(m -> !m.isExternalNonVoting());
+        if (!mentorIsVoting) {
+            throw new BadRequestException("Менторот мора да остане член на комисијата со право на глас.");
+        }
+    }
+
     private Thesis findThesis(UUID id) {
         return thesisRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Thesis not found: " + id));
+                .orElseThrow(() -> new ResourceNotFoundException("Дипломската работа не е пронајдена: " + id));
     }
 
     private void requireRole(User user, Role required) {
         if (user.getRole() != required) {
-            throw new UnauthorizedException("This action requires role: " + required);
+            throw new UnauthorizedException("Оваа акција бара улога: " + required);
         }
     }
 
     private void requireStatus(Thesis thesis, ThesisStatus required) {
         if (thesis.getStatus() != required) {
             throw new BadRequestException(
-                    "Invalid status. Expected: " + required + ", current: " + thesis.getStatus());
+                    "Невалиден статус. Очекуван: " + required + ", тековен: " + thesis.getStatus());
         }
     }
 

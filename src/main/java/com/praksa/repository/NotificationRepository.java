@@ -1,6 +1,7 @@
 package com.praksa.repository;
 
 import com.praksa.model.Notification;
+import com.praksa.model.Thesis;
 import com.praksa.model.User;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -48,4 +49,17 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
      */
     List<Notification> findByIsSentFalseAndCreatedAtBeforeOrderByCreatedAtAsc(
             OffsetDateTime cutoff, Pageable pageable);
+
+    /**
+     * Deduplication check for the mentor-review-deadline reminder job. A notification of the
+     * given {@code type} for this exact (thesis, recipient) pair, created AFTER
+     * {@code cycleStart} (the thesis's CURRENT {@code lastVersionSubmittedAt}), means a
+     * reminder for THIS submission cycle has already been sent — the job must skip it.
+     * When the student uploads a new version, {@code lastVersionSubmittedAt} advances, so an
+     * old reminder (created before the new cycle start) no longer counts and a fresh reminder
+     * is allowed again after the next 45-day window. No new schema — reuses the existing
+     * {@code thesis}/{@code user}/{@code type}/{@code createdAt} columns.
+     */
+    boolean existsByThesisAndUserAndTypeAndCreatedAtAfter(
+            Thesis thesis, User user, String type, OffsetDateTime cycleStart);
 }

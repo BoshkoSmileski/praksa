@@ -6,7 +6,9 @@ import com.praksa.model.User;
 import com.praksa.model.enums.MentorDecision;
 import com.praksa.model.enums.Role;
 import com.praksa.repository.CommitteeMemberRepository;
+import com.praksa.repository.DeadlineExtensionRequestRepository;
 import com.praksa.repository.DefenseRepository;
+import com.praksa.repository.DefenseRequestRepository;
 import com.praksa.repository.DefenseResultRepository;
 import com.praksa.repository.NotificationRepository;
 import com.praksa.repository.ThesisRepository;
@@ -85,6 +87,8 @@ abstract class AbstractWorkflowIntegrationTest {
     @Autowired protected ThesisRepository thesisRepository;
     @Autowired protected CommitteeMemberRepository committeeRepository;
     @Autowired protected DefenseRepository defenseRepository;
+    @Autowired protected DefenseRequestRepository defenseRequestRepository;
+    @Autowired protected DeadlineExtensionRequestRepository deadlineExtensionRequestRepository;
     @Autowired protected DefenseResultRepository defenseResultRepository;
     @Autowired protected NotificationRepository notificationRepository;
     @Autowired protected ThesisStatusHistoryRepository statusHistoryRepository;
@@ -223,6 +227,22 @@ abstract class AbstractWorkflowIntegrationTest {
     protected void submitApplication(User student, UUID thesisId) throws Exception {
         doPatch("/api/theses/" + thesisId + "/submit-application", student, null)
                 .andExpect(status().isOk());
+        // Real HTTP calls run milliseconds apart, but the official 14-day minimum wait between
+        // application submission and a defense request (DefenseServiceImpl#createDefenseRequest)
+        // is a real-world elapsed-time rule. Backdate the stamp the real submitApplication() call
+        // just set, exactly like the committee auto-advance tests backdate
+        // committeeReviewStartedAt to simulate elapsed business days — the rule itself is
+        // unit-tested precisely (day-by-day) in DefenseRequestApplicationAgeTest; these workflow
+        // tests only need "enough" time to have passed so later defense-request steps are not
+        // what's under test here.
+        backdateApplicationSubmission(thesisId, 30);
+    }
+
+    /** Rewrites applicationSubmittedAt directly in the DB to simulate elapsed real time. */
+    protected void backdateApplicationSubmission(UUID thesisId, long daysAgo) {
+        var thesis = thesisRepository.findById(thesisId).orElseThrow();
+        thesis.setApplicationSubmittedAt(OffsetDateTime.now().minusDays(daysAgo));
+        thesisRepository.save(thesis);
     }
 
     protected void archiveValidate(User archive, UUID thesisId, boolean approved, String comment) throws Exception {
@@ -269,6 +289,21 @@ abstract class AbstractWorkflowIntegrationTest {
         return dataNode(r);
     }
 
+    /**
+     * Official faculty procedure — proposes a 4-member committee (mentor + p1 + p2 voting,
+     * {@code external} flagged as the non-voting professional). Returns the committee JSON
+     * array node (4 members).
+     */
+    protected JsonNode proposeCommitteeWithExternal(User mentor, UUID thesisId, User p1, User p2,
+                                                     User external) throws Exception {
+        MvcResult r = doPost("/api/theses/" + thesisId + "/committee/propose", mentor,
+                Map.of("professorIds", List.of(
+                                p1.getId().toString(), p2.getId().toString(), external.getId().toString()),
+                        "externalProfessorId", external.getId().toString()))
+                .andExpect(status().isOk()).andReturn();
+        return dataNode(r);
+    }
+
     protected void approveCommittee(User service, UUID thesisId) throws Exception {
         doPost("/api/theses/" + thesisId + "/committee/approve", service, null)
                 .andExpect(status().isOk());
@@ -291,16 +326,48 @@ abstract class AbstractWorkflowIntegrationTest {
                 .andExpect(status().isOk());
     }
 
-    protected void requestDefense(User student, UUID thesisId) throws Exception {
-        doPost("/api/theses/" + thesisId + "/defenses/request", student, null)
-                .andExpect(status().isOk());
-    }
-
-    protected UUID scheduleDefense(User service, UUID thesisId, String room, OffsetDateTime at) throws Exception {
-        MvcResult r = doPost("/api/theses/" + thesisId + "/defenses", service,
+    /** STUDENT proposes the actual room/date/time. Returns the new DefenseRequest id. */
+    protected UUID requestDefense(User student, UUID thesisId, String room, OffsetDateTime at) throws Exception {
+        MvcResult r = doPost("/api/theses/" + thesisId + "/defenses/request", student,
                 Map.of("room", room, "scheduledAt", at))
                 .andExpect(status().isOk()).andReturn();
         return dataId(r);
+    }
+
+    /** STUDENT_SERVICE approves the thesis's current PENDING request. */
+    protected void approveDefenseRequest(User service, UUID thesisId) throws Exception {
+        doPatch("/api/theses/" + thesisId + "/defenses/request/decision", service,
+                Map.of("approved", true))
+                .andExpect(status().isOk());
+    }
+
+    /** STUDENT_SERVICE rejects the thesis's current PENDING request with a reason. */
+    protected void rejectDefenseRequest(User service, UUID thesisId, String reason) throws Exception {
+        doPatch("/api/theses/" + thesisId + "/defenses/request/decision", service,
+                Map.of("approved", false, "reason", reason))
+                .andExpect(status().isOk());
+    }
+
+    /** STUDENT submits a deadline extension request. Returns the new request id. */
+    protected UUID requestDeadlineExtension(User student, UUID thesisId, String reason, int requestedDays) throws Exception {
+        MvcResult r = doPost("/api/theses/" + thesisId + "/deadline-extension-request", student,
+                Map.of("reason", reason, "requestedDays", requestedDays))
+                .andExpect(status().isOk()).andReturn();
+        return dataId(r);
+    }
+
+    /** STUDENT_SERVICE approves the thesis's current PENDING deadline extension request. */
+    protected void approveDeadlineExtension(User service, UUID thesisId) throws Exception {
+        doPatch("/api/theses/" + thesisId + "/deadline-extension-decision", service,
+                Map.of("approved", true))
+                .andExpect(status().isOk());
+    }
+
+    /** STUDENT_SERVICE rejects the thesis's current PENDING deadline extension request with a reason. */
+    protected void rejectDeadlineExtension(User service, UUID thesisId, String reason) throws Exception {
+        doPatch("/api/theses/" + thesisId + "/deadline-extension-decision", service,
+                Map.of("approved", false, "reason", reason))
+                .andExpect(status().isOk());
     }
 
     protected UUID recordResult(User professor, UUID thesisId, UUID defenseId, int grade) throws Exception {
@@ -343,13 +410,24 @@ abstract class AbstractWorkflowIntegrationTest {
         return thesisId;
     }
 
-    /** Drives a fresh thesis to DEFENSE_SCHEDULED and returns the defense id. */
+    /**
+     * Drives a fresh thesis into COMMITTEE_REVIEW with a fully approved 4-member committee
+     * (mentor + professorA + professorB voting, {@code external} the non-voting professional).
+     */
+    protected UUID advanceToCommitteeReviewWithExternal(Actors a, User external) throws Exception {
+        UUID thesisId = advanceToMentorApproved(a);
+        proposeCommitteeWithExternal(a.mentor, thesisId, a.professorA, a.professorB, external);
+        approveCommittee(a.service, thesisId);
+        return thesisId;
+    }
+
+    /** Drives a fresh thesis to DEFENSE_SCHEDULED and returns its id (student proposes, service approves). */
     protected UUID advanceToDefenseScheduled(Actors a, String room, OffsetDateTime at) throws Exception {
         UUID thesisId = advanceToCommitteeReview(a);
         acceptReview(a.service, thesisId);
         verifyDefenseEligibility(a.service, thesisId, true, true);
-        requestDefense(a.student, thesisId);
-        scheduleDefense(a.service, thesisId, room, at);
+        requestDefense(a.student, thesisId, room, at);
+        approveDefenseRequest(a.service, thesisId);
         return thesisId;
     }
 

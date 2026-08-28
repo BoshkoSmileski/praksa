@@ -60,4 +60,16 @@ public interface ThesisRepository extends JpaRepository<Thesis, UUID> {
            "AND t.submissionDeadline < :cutoff AND t.status IN :statuses")
     List<Thesis> findExpiredPendingApplications(java.time.OffsetDateTime cutoff,
                                                 java.util.Collection<ThesisStatus> statuses);
+
+    /**
+     * Theses currently IN_PROGRESS, with an assigned mentor, whose most recently submitted
+     * version has been waiting for mentor review since at or before the cutoff (45 days ago).
+     * Used by the mentor-review-deadline reminder job. Legacy rows with a null
+     * lastVersionSubmittedAt are excluded (never had a version uploaded under this feature).
+     */
+    @Query("SELECT t FROM Thesis t WHERE t.status = 'IN_PROGRESS' " +
+           "AND t.lastVersionSubmittedAt IS NOT NULL " +
+           "AND t.lastVersionSubmittedAt <= :cutoff " +
+           "AND t.mentor IS NOT NULL")
+    List<Thesis> findOverdueMentorReviews(java.time.OffsetDateTime cutoff);
 }

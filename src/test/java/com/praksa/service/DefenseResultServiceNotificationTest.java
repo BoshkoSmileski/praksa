@@ -2,10 +2,12 @@ package com.praksa.service;
 
 import com.praksa.dto.defense.RecordResultRequest;
 import com.praksa.exception.BadRequestException;
+import com.praksa.model.CommitteeMember;
 import com.praksa.model.Defense;
 import com.praksa.model.DefenseResult;
 import com.praksa.model.Thesis;
 import com.praksa.model.User;
+import com.praksa.model.enums.MemberRole;
 import com.praksa.model.enums.NotificationType;
 import com.praksa.model.enums.Role;
 import com.praksa.model.enums.ThesisStatus;
@@ -56,6 +58,12 @@ class DefenseResultServiceNotificationTest {
                 .fullName(role + " User").role(role).build();
     }
 
+    /** A voting (non-external) committee seat for {@code recorder} on {@code thesis}. */
+    private CommitteeMember votingSeat(Thesis thesis, User recorder) {
+        return CommitteeMember.builder().id(UUID.randomUUID()).thesis(thesis).professor(recorder)
+                .memberRole(MemberRole.FORMAL_MEMBER).isExternalNonVoting(false).build();
+    }
+
     @Test
     @DisplayName("recordResult notifies the student with THESIS_GRADED (incl. grade) and THESIS_ARCHIVED")
     void recordResult_sendsGradedAndArchived() {
@@ -75,8 +83,9 @@ class DefenseResultServiceNotificationTest {
 
         when(securityUtils.getCurrentUser()).thenReturn(committee);
         when(thesisRepository.findById(thesis.getId())).thenReturn(Optional.of(thesis));
-        // Recorder is a seated committee member of THIS thesis (write-side grading authorization).
-        when(committeeRepository.existsByThesisAndProfessor(thesis, committee)).thenReturn(true);
+        // Recorder is a seated VOTING committee member of THIS thesis (write-side grading authorization).
+        when(committeeRepository.findByThesisAndProfessor(thesis, committee))
+                .thenReturn(Optional.of(votingSeat(thesis, committee)));
         when(defenseRepository.findById(defense.getId())).thenReturn(Optional.of(defense));
         when(resultRepository.findByDefense(defense)).thenReturn(Optional.empty());
         when(thesisRepository.countByArchiveRegistrationNumberStartingWith(anyString())).thenReturn(0L);
@@ -108,8 +117,10 @@ class DefenseResultServiceNotificationTest {
 
         when(securityUtils.getCurrentUser()).thenReturn(committee);
         when(thesisRepository.findById(thesis.getId())).thenReturn(Optional.of(thesis));
-        // Seated committee member: authorization passes, so the cancelled-defense rule is what rejects.
-        when(committeeRepository.existsByThesisAndProfessor(thesis, committee)).thenReturn(true);
+        // Seated voting committee member: authorization passes, so the cancelled-defense rule
+        // is what rejects.
+        when(committeeRepository.findByThesisAndProfessor(thesis, committee))
+                .thenReturn(Optional.of(votingSeat(thesis, committee)));
         when(defenseRepository.findById(cancelled.getId())).thenReturn(Optional.of(cancelled));
 
         assertThrows(BadRequestException.class,

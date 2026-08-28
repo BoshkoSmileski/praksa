@@ -217,7 +217,7 @@ public class DefenseRecordPdfService {
         for (CommitteeMember m : committee) {
             sb.append("<tr><td class=\"num\">").append(i++).append("</td>")
               .append("<td>").append(escape(m.getProfessor().getFullName())).append("</td>")
-              .append("<td>").append(roleLabel(m.getMemberRole())).append("</td></tr>");
+              .append("<td>").append(roleLabel(m)).append("</td></tr>");
         }
         return sb.toString();
     }
@@ -231,7 +231,7 @@ public class DefenseRecordPdfService {
             for (CommitteeMember m : committee) {
                 if (perRow == 2) { sb.append("</div><div class=\"sig-row\">"); perRow = 0; }
                 sb.append("<div class=\"sig-col\"><div class=\"sig-line\">")
-                  .append(roleLabel(m.getMemberRole())).append(" — ")
+                  .append(roleLabel(m)).append(" — ")
                   .append(escape(m.getProfessor().getFullName()))
                   .append("</div></div>");
                 perRow++;
@@ -244,8 +244,15 @@ public class DefenseRecordPdfService {
         return sb.toString();
     }
 
-    private String roleLabel(MemberRole role) {
-        if (role == MemberRole.MENTOR_MEMBER) return "Ментор";
+    /**
+     * Official faculty procedure: the external professional is a genuine committee member but
+     * explicitly NON-VOTING. The record must not represent them the same way as a regular voting
+     * member, so their row/signature is labelled distinctly rather than the generic "Член на
+     * комисија" — otherwise the printed record would falsely imply they cast a vote.
+     */
+    private String roleLabel(CommitteeMember m) {
+        if (m.isExternalNonVoting()) return "Надворешен член (без право на глас)";
+        if (m.getMemberRole() == MemberRole.MENTOR_MEMBER) return "Ментор";
         return "Член на комисија";
     }
 

@@ -163,12 +163,12 @@ public class NotificationServiceImpl implements NotificationService {
 
         // 1. Load the notification (404 if it does not exist).
         Notification notification = notificationRepository.findById(notificationId)
-                .orElseThrow(() -> new ResourceNotFoundException("Notification not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("Известувањето не е пронајдено."));
 
         // 2. Verify it belongs to the current user (403 otherwise). getId() on the LAZY
         //    user proxy is safe — it does not trigger initialization.
         if (!notification.getUser().getId().equals(currentUser.getId())) {
-            throw new UnauthorizedException("You cannot modify another user's notification");
+            throw new UnauthorizedException("Не можете да го менувате известувањето на друг корисник.");
         }
 
         // 3. Idempotent mark-read. Only write when it actually changes, so an already-read
@@ -201,7 +201,7 @@ public class NotificationServiceImpl implements NotificationService {
 
     private void requireRole(User user, Role required) {
         if (user.getRole() != required) {
-            throw new UnauthorizedException("This action requires role: " + required);
+            throw new UnauthorizedException("Оваа акција бара улога: " + required);
         }
     }
 
@@ -211,23 +211,23 @@ public class NotificationServiceImpl implements NotificationService {
 
     private String buildSubject(NotificationType type, Thesis thesis) {
         if (thesis != null) {
-            return "[DiplomaSystem] " + type.getSubject() + " — " + thesis.getTitle();
+            return "[Дипломски систем] " + type.getSubject() + " — " + thesis.getTitle();
         }
-        return "[DiplomaSystem] " + type.getSubject();
+        return "[Дипломски систем] " + type.getSubject();
     }
 
     private String buildBody(User recipient, Thesis thesis, NotificationType type, String message) {
         StringBuilder sb = new StringBuilder();
-        sb.append("Dear ").append(recipient.getFullName()).append(",\n\n");
+        sb.append("Почитуван/а ").append(recipient.getFullName()).append(",\n\n");
         sb.append(message).append("\n\n");
 
         if (thesis != null) {
-            sb.append("Thesis: ").append(thesis.getTitle()).append("\n");
-            sb.append("Current status: ").append(thesis.getStatus()).append("\n\n");
+            sb.append("Дипломска работа: ").append(thesis.getTitle()).append("\n");
+            sb.append("Тековен статус: ").append(thesis.getStatus()).append("\n\n");
         }
 
-        sb.append("This is an automated message from the DiplomaSystem.\n");
-        sb.append("Please do not reply to this email.");
+        sb.append("Ова е автоматска порака од системот за дипломски работи.\n");
+        sb.append("Ве молиме не одговарајте на оваа е-пошта.");
         return sb.toString();
     }
 }

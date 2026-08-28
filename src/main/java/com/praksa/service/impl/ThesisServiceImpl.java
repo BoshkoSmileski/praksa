@@ -61,12 +61,15 @@ public class ThesisServiceImpl implements ThesisService {
         // "Active" means any thesis that is not in a non-active terminal state.
         // ARCHIVED is a successful terminal state; ELIGIBILITY_REJECTED is a dead-end
         // terminal state that has no outgoing transition — a student whose eligibility
-        // was rejected must be able to start over. Both are preserved as historical/audit
-        // rows (never deleted or re-statused); they simply do not block a new thesis.
+        // was rejected must be able to start over. DEFENSE_FAILED (grade 5 — official
+        // faculty rule) is likewise a non-active terminal state: the defense concluded
+        // (unsuccessfully), so the student must be free to rework the topic or open a
+        // fresh application. All three are preserved as historical/audit rows (never
+        // deleted or re-statused); they simply do not block a new thesis.
         boolean hasActive = thesisRepository.findByStudent(student).stream()
                 .anyMatch(t -> isActiveStatus(t.getStatus()));
         if (hasActive) {
-            throw new BadRequestException("You already have an active thesis");
+            throw new BadRequestException("Веќе имате активна дипломска работа.");
         }
 
         // 200-credit eligibility gate. A null (unknown) credit balance is treated as
@@ -75,7 +78,7 @@ public class ThesisServiceImpl implements ThesisService {
         Integer credits = student.getCredits();
         if (credits == null || credits < REQUIRED_CREDITS_FOR_THESIS) {
             throw new BadRequestException(
-                    "At least " + REQUIRED_CREDITS_FOR_THESIS + " credits are required to submit a thesis application.");
+                    "Потребни се најмалку " + REQUIRED_CREDITS_FOR_THESIS + " кредити за поднесување пријава за дипломска работа.");
         }
 
         // Anchor createdAt and the 1-month submission deadline to the same instant.
@@ -145,18 +148,18 @@ public class ThesisServiceImpl implements ThesisService {
         // Student can only send a mentor request when in TOPIC_SELECTION or MENTOR_REJECTED_TOPIC
         if (thesis.getStatus() != ThesisStatus.TOPIC_SELECTION
                 && thesis.getStatus() != ThesisStatus.MENTOR_REJECTED_TOPIC) {
-            throw new BadRequestException("Cannot submit mentor request in current status: " + thesis.getStatus());
+            throw new BadRequestException("Не можете да поднесете барање до ментор во тековниот статус: " + thesis.getStatus());
         }
 
         User mentor = userRepository.findById(request.getMentorId())
-                .orElseThrow(() -> new ResourceNotFoundException("Mentor not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("Менторот не е пронајден."));
 
         requireRole(mentor, Role.MENTOR);
 
-        // Business rule: mentor can supervise at most 10 active theses
+        // Business rule: mentor can supervise at most 15 active theses
         long activeMentorCount = thesisRepository.countActiveMentorTheses(mentor);
-        if (activeMentorCount >= 10) {
-            throw new BadRequestException("This mentor already has 10 active theses and cannot accept more");
+        if (activeMentorCount >= 15) {
+            throw new BadRequestException("Овој ментор веќе има 15 активни дипломски работи и не може да прифати нови.");
         }
 
         thesis.setMentor(mentor);
@@ -187,13 +190,13 @@ public class ThesisServiceImpl implements ThesisService {
 
         // Only the assigned mentor of THIS thesis can decide
         if (!mentor.getId().equals(thesis.getMentor().getId())) {
-            throw new UnauthorizedException("You are not the assigned mentor for this thesis");
+            throw new UnauthorizedException("Не сте назначениот ментор на оваа дипломска работа.");
         }
 
         // Comment is REQUIRED when requesting changes (student needs to know what to change)
         if (request.getDecision() == MentorDecision.REQUEST_CHANGES
                 && (request.getMentorComment() == null || request.getMentorComment().isBlank())) {
-            throw new BadRequestException("A comment is required when requesting changes");
+            throw new BadRequestException("Потребен е коментар кога се бараат измени.");
         }
 
         if (request.getMentorComment() != null && !request.getMentorComment().isBlank()) {
@@ -212,14 +215,14 @@ public class ThesisServiceImpl implements ThesisService {
                 notificationService.notify(thesis.getStudent(), thesis, NotificationType.MENTOR_REJECTED_TOPIC);
             }
             case REQUEST_CHANGES -> {
-                // Mentor stays assigned; mentor's slot remains consumed (counts toward 10-active)
+                // Mentor stays assigned; mentor's slot remains consumed (counts toward 15-active)
                 // Increment revision counter so the student / list views can show the cycle count
                 thesis.setRevisionCount(thesis.getRevisionCount() + 1);
                 transitionStatus(thesis, ThesisStatus.MENTOR_REQUESTED_CHANGES, mentor);
                 // Surface the mentor's feedback in the notification body so the student sees WHAT to
                 // change without opening the thesis. Primitive String — nothing crosses the @Async boundary.
                 String message = NotificationType.MENTOR_REQUESTED_CHANGES.getDefaultBody()
-                        + "\n\nMentor feedback: " + thesis.getMentorComment();
+                        + "\n\nПовратна информација од менторот: " + thesis.getMentorComment();
                 notificationService.notify(thesis.getStudent(), thesis,
                         NotificationType.MENTOR_REQUESTED_CHANGES, message);
             }
@@ -249,7 +252,7 @@ public class ThesisServiceImpl implements ThesisService {
 
         // Sanity check — mentor should still be assigned (request-changes never clears it)
         if (thesis.getMentor() == null) {
-            throw new BadRequestException("Mentor is no longer assigned; cannot revise to same mentor");
+            throw new BadRequestException("Менторот повеќе не е назначен на оваа дипломска работа.");
         }
 
         thesis.setTitle(request.getTitle().trim());
@@ -290,7 +293,7 @@ public class ThesisServiceImpl implements ThesisService {
                 && s != ThesisStatus.APPLICATION_REJECTED_BY_ARCHIVE
                 && s != ThesisStatus.APPLICATION_REJECTED_BY_SERVICE) {
             throw new BadRequestException(
-                    "Application can only be submitted from APPLICATION_SUBMITTED or a rejection status. Current: " + s);
+                    "Пријавата може да се поднесе само од статус APPLICATION_SUBMITTED или од статус на одбивање. Тековен статус: " + s);
         }
 
         // Enforce the 1-month submission deadline BEFORE doing any work (no PDF is
@@ -300,12 +303,20 @@ public class ThesisServiceImpl implements ThesisService {
         OffsetDateTime deadline = thesis.getSubmissionDeadline();
         if (deadline != null && OffsetDateTime.now().isAfter(deadline)) {
             throw new BadRequestException(
-                    "The submission deadline has passed; the thesis application can no longer be submitted.");
+                    "Рокот за поднесување истече; пријавата за дипломска работа повеќе не може да се поднесе.");
         }
 
         // Generate the application PDF artifact — archive/service review this
         String pdfPath = applicationPdfService.generate(thesis);
         thesis.setApplicationPdfPath(pdfPath);
+
+        // Stamp the formal-submission timestamp. This starts the official 14-day minimum
+        // waiting period that must elapse before a defense can later be requested (see
+        // DefenseServiceImpl#createDefenseRequest). Re-stamped on every successful
+        // (re)submission — including a resubmission after rejection — since each is a fresh
+        // formal submission event. Never touched by version uploads, comments, or committee
+        // changes (no other code path sets this field).
+        thesis.setApplicationSubmittedAt(OffsetDateTime.now());
 
         transitionStatus(thesis, ThesisStatus.PENDING_ARCHIVE_VALIDATION, student);
 
@@ -330,7 +341,7 @@ public class ThesisServiceImpl implements ThesisService {
 
         // On rejection a comment is mandatory (so student knows what to fix)
         if (!request.getApproved() && (request.getComment() == null || request.getComment().isBlank())) {
-            throw new BadRequestException("A rejection comment is required");
+            throw new BadRequestException("Потребен е коментар за причината за одбивање.");
         }
 
         // Persist the note (either an approval note or a rejection reason)
@@ -347,7 +358,7 @@ public class ThesisServiceImpl implements ThesisService {
             // Tell student about the rejection — include the reason in the message body.
             // We pass a primitive String (not an entity) so nothing crosses the @Async boundary.
             String message = NotificationType.APPLICATION_REJECTED_BY_ARCHIVE.getDefaultBody()
-                    + "\n\nRejection reason: " + thesis.getArchiveComment();
+                    + "\n\nПричина за одбивање: " + thesis.getArchiveComment();
             notificationService.notify(thesis.getStudent(), thesis,
                     NotificationType.APPLICATION_REJECTED_BY_ARCHIVE, message);
         }
@@ -369,7 +380,7 @@ public class ThesisServiceImpl implements ThesisService {
         requireStatus(thesis, ThesisStatus.PENDING_SERVICE_VALIDATION);
 
         if (!request.getApproved() && (request.getComment() == null || request.getComment().isBlank())) {
-            throw new BadRequestException("A rejection comment is required");
+            throw new BadRequestException("Потребен е коментар за причината за одбивање.");
         }
 
         if (request.getComment() != null && !request.getComment().isBlank()) {
@@ -383,7 +394,7 @@ public class ThesisServiceImpl implements ThesisService {
             transitionStatus(thesis, ThesisStatus.APPLICATION_REJECTED_BY_SERVICE, serviceUser);
             // Include the rejection reason in the message body (primitive String — no entity crosses @Async).
             String message = NotificationType.APPLICATION_REJECTED_BY_SERVICE.getDefaultBody()
-                    + "\n\nRejection reason: " + thesis.getServiceComment();
+                    + "\n\nПричина за одбивање: " + thesis.getServiceComment();
             notificationService.notify(thesis.getStudent(), thesis,
                     NotificationType.APPLICATION_REJECTED_BY_SERVICE, message);
         }
@@ -405,7 +416,7 @@ public class ThesisServiceImpl implements ThesisService {
         requireStatus(thesis, ThesisStatus.FINAL_SUBMITTED);
 
         if (!mentor.getId().equals(thesis.getMentor().getId())) {
-            throw new UnauthorizedException("You are not the assigned mentor for this thesis");
+            throw new UnauthorizedException("Не сте назначениот ментор на оваа дипломска работа.");
         }
 
         transitionStatus(thesis, ThesisStatus.MENTOR_APPROVED, mentor);
@@ -478,9 +489,15 @@ public class ThesisServiceImpl implements ThesisService {
         boolean documentationComplete = Boolean.TRUE.equals(request.getDocumentationComplete());
         if (!examsCompleted || !documentationComplete) {
             throw new BadRequestException(
-                    "Defense eligibility not confirmed: both required exams and required documentation "
-                            + "must be marked complete before the defense can proceed.");
+                    "Условите за одбрана не се потврдени: и потребните испити и потребната документација "
+                            + "мора да бидат означени како комплетирани пред да може да продолжи одбраната.");
         }
+
+        // Stamp the defense deadline: the student now has 1 month (mirroring the same
+        // "+1 month" convention already used for submissionDeadline) to complete the defense
+        // process. This is the ONLY place defenseDeadline is ever set from scratch — later
+        // extended (never re-derived) by DeadlineExtensionServiceImpl on an approved request.
+        thesis.setDefenseDeadline(OffsetDateTime.now().plusMonths(1));
 
         transitionStatus(thesis, ThesisStatus.PENDING_DEFENSE_SCHEDULING, serviceUser);
 
@@ -527,12 +544,13 @@ public class ThesisServiceImpl implements ThesisService {
                     .toList();
         } else if (user.getRole() == Role.COMMITTEE) {
             // COMMITTEE-role users participate only in defense grading. Scope their list
-            // to theses they can act on (DEFENSE_SCHEDULED) plus theses already archived
-            // (defense grading is the transition that archives a thesis, so recently graded
-            // theses stay visible here for reference).
+            // to theses they can act on (DEFENSE_SCHEDULED) plus theses whose defense they
+            // already graded — ARCHIVED (grade 6-10, passed) or DEFENSE_FAILED (grade 5,
+            // not passed) — so a just-graded thesis stays visible here for reference either way.
             theses = thesisRepository.findAll().stream()
                     .filter(t -> t.getStatus() == ThesisStatus.DEFENSE_SCHEDULED
-                              || t.getStatus() == ThesisStatus.ARCHIVED)
+                              || t.getStatus() == ThesisStatus.ARCHIVED
+                              || t.getStatus() == ThesisStatus.DEFENSE_FAILED)
                     .toList();
         } else {
             // Student Service sees all theses
@@ -581,7 +599,7 @@ public class ThesisServiceImpl implements ThesisService {
             // Show them the theses they might grade.
             theses = thesisRepository.findByStatus(ThesisStatus.DEFENSE_SCHEDULED);
         } else {
-            throw new UnauthorizedException("You do not have access to the committee view");
+            throw new UnauthorizedException("Немате пристап до прегледот на комисии.");
         }
 
         return theses.stream().map(ThesisResponse::from).toList();
@@ -593,11 +611,15 @@ public class ThesisServiceImpl implements ThesisService {
         User user = securityUtils.getCurrentUser();
         List<Thesis> theses;
 
+        // ARCHIVED (passed, grade 6-10) and DEFENSE_FAILED (not passed, grade 5) are both
+        // defense OUTCOMES, so both stay visible here for reference alongside the
+        // in-progress defense stages.
         java.util.EnumSet<ThesisStatus> defenseStatuses = java.util.EnumSet.of(
                 ThesisStatus.PENDING_DEFENSE_CHECK,
                 ThesisStatus.PENDING_DEFENSE_SCHEDULING,
                 ThesisStatus.DEFENSE_SCHEDULED,
-                ThesisStatus.ARCHIVED);
+                ThesisStatus.ARCHIVED,
+                ThesisStatus.DEFENSE_FAILED);
 
         if (user.getRole() == Role.STUDENT) {
             theses = thesisRepository.findByStudent(user).stream()
@@ -613,14 +635,15 @@ public class ThesisServiceImpl implements ThesisService {
         } else if (user.getRole() == Role.COMMITTEE) {
             theses = thesisRepository.findAll().stream()
                     .filter(t -> t.getStatus() == ThesisStatus.DEFENSE_SCHEDULED
-                              || t.getStatus() == ThesisStatus.ARCHIVED)
+                              || t.getStatus() == ThesisStatus.ARCHIVED
+                              || t.getStatus() == ThesisStatus.DEFENSE_FAILED)
                     .toList();
         } else if (user.getRole() == Role.STUDENT_SERVICE) {
             theses = thesisRepository.findAll().stream()
                     .filter(t -> defenseStatuses.contains(t.getStatus()))
                     .toList();
         } else {
-            throw new UnauthorizedException("You do not have access to the defenses view");
+            throw new UnauthorizedException("Немате пристап до прегледот на одбрани.");
         }
 
         return theses.stream().map(ThesisResponse::from).toList();
@@ -639,13 +662,13 @@ public class ThesisServiceImpl implements ThesisService {
         // Knowing the UUID never bypasses this.
         thesisReadAccessPolicy.requireReadAccess(thesis, securityUtils.getCurrentUser());
         if (thesis.getApplicationPdfPath() == null) {
-            throw new ResourceNotFoundException("No application PDF generated yet for this thesis");
+            throw new ResourceNotFoundException("Сè уште не е генерирана PDF-датотека на пријавата за оваа дипломска работа.");
         }
         try {
             java.nio.file.Path p = java.nio.file.Paths.get(thesis.getApplicationPdfPath()).toAbsolutePath().normalize();
             org.springframework.core.io.UrlResource r = new org.springframework.core.io.UrlResource(p.toUri());
             if (!r.exists() || !r.isReadable()) {
-                throw new ResourceNotFoundException("Application PDF file is missing on disk");
+                throw new ResourceNotFoundException("Датотеката со PDF на пријавата не е пронајдена.");
             }
             return r;
         } catch (java.net.MalformedURLException e) {
@@ -658,7 +681,7 @@ public class ThesisServiceImpl implements ThesisService {
     public ThesisResponse findByRegistrationNumber(String registrationNumber) {
         Thesis thesis = thesisRepository.findByArchiveRegistrationNumber(registrationNumber.trim())
                 .orElseThrow(() -> new ResourceNotFoundException(
-                        "No thesis found with registration number: " + registrationNumber));
+                        "Не е пронајдена дипломска работа со регистарски број: " + registrationNumber));
         // READ-SIDE IDOR guard — same rule as getThesisById. Registration numbers are
         // sequential (DT-YYYY-NNNN) and trivially enumerable, so without this check any
         // authenticated user could harvest every archived thesis (including the internal
@@ -690,7 +713,7 @@ public class ThesisServiceImpl implements ThesisService {
 
     private Thesis findThesis(UUID id) {
         return thesisRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Thesis not found with id: " + id));
+                .orElseThrow(() -> new ResourceNotFoundException("Дипломската работа не е пронајдена (id: " + id + ")."));
     }
 
     /**
@@ -702,12 +725,18 @@ public class ThesisServiceImpl implements ThesisService {
      *   <li>{@code ELIGIBILITY_REJECTED} — a dead-end with no outgoing transition; the
      *       student was refused eligibility and must be allowed to submit a fresh thesis.
      *       The rejected row itself is left untouched as historical/audit data.</li>
+     *   <li>{@code DEFENSE_FAILED} — official faculty rule: a defense graded 5 was NOT
+     *       successfully defended. The defense already concluded, so it must not keep
+     *       blocking the student from reworking the topic or opening a new application.
+     *       The failed row is left untouched as historical/audit data (see
+     *       DefenseResultServiceImpl#recordResult).</li>
      * </ul>
      * Every other status is considered active and enforces the one-active-thesis rule.
      */
     private boolean isActiveStatus(ThesisStatus status) {
         return status != ThesisStatus.ARCHIVED
-                && status != ThesisStatus.ELIGIBILITY_REJECTED;
+                && status != ThesisStatus.ELIGIBILITY_REJECTED
+                && status != ThesisStatus.DEFENSE_FAILED;
     }
 
     /**
@@ -735,20 +764,20 @@ public class ThesisServiceImpl implements ThesisService {
 
     private void requireRole(User user, Role required) {
         if (user.getRole() != required) {
-            throw new UnauthorizedException("This action requires role: " + required);
+            throw new UnauthorizedException("Оваа акција бара улога: " + required);
         }
     }
 
     private void requireStatus(Thesis thesis, ThesisStatus required) {
         if (thesis.getStatus() != required) {
             throw new BadRequestException(
-                    "Invalid thesis status. Expected: " + required + ", but was: " + thesis.getStatus());
+                    "Невалиден статус на дипломската работа. Очекуван: " + required + ", а тековен е: " + thesis.getStatus());
         }
     }
 
     private void requireOwner(Thesis thesis, User user) {
         if (!thesis.getStudent().getId().equals(user.getId())) {
-            throw new UnauthorizedException("You do not own this thesis");
+            throw new UnauthorizedException("Не сте сопственик на оваа дипломска работа.");
         }
     }
 }

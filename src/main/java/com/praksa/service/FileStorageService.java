@@ -88,20 +88,20 @@ public class FileStorageService {
 
     private void validatePdf(MultipartFile file) {
         if (file == null || file.isEmpty()) {
-            throw new BadRequestException("File cannot be empty");
+            throw new BadRequestException("Датотеката не смее да биде празна.");
         }
 
         // Check the MIME type declared by the client
         String contentType = file.getContentType();
         if (contentType == null || !contentType.equals("application/pdf")) {
-            throw new BadRequestException("Only PDF files are allowed");
+            throw new BadRequestException("Дозволени се само PDF-датотеки.");
         }
 
         // Also check the file extension — a second layer of validation
         // because a malicious client could set the content type to anything
         String originalName = file.getOriginalFilename();
         if (originalName == null || !originalName.toLowerCase().endsWith(".pdf")) {
-            throw new BadRequestException("File must have a .pdf extension");
+            throw new BadRequestException("Датотеката мора да има екстензија .pdf.");
         }
     }
 

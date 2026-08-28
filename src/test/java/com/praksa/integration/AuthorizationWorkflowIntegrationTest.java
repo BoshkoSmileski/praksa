@@ -87,8 +87,8 @@ class AuthorizationWorkflowIntegrationTest extends AbstractWorkflowIntegrationTe
     }
 
     @Test
-    @DisplayName("D: scheduling a defense is STUDENT_SERVICE-only — neither the mentor nor the student may schedule (403)")
-    void scheduleDefense_isServiceOnly() throws Exception {
+    @DisplayName("D: proposing a defense is STUDENT-owner-only; deciding it is STUDENT_SERVICE-only (403 otherwise)")
+    void defenseRequestWorkflow_roleBoundaries() throws Exception {
         Actors a = newActors();
         UUID thesisId = advanceToCommitteeReview(a);
         acceptReview(a.service, thesisId);
@@ -96,21 +96,35 @@ class AuthorizationWorkflowIntegrationTest extends AbstractWorkflowIntegrationTe
 
         OffsetDateTime when = OffsetDateTime.now().plusDays(8);
 
-        // Mentor cannot schedule → 403.
-        doPost("/api/theses/" + thesisId + "/defenses", a.mentor,
+        // Mentor cannot propose a defense term → 403.
+        doPost("/api/theses/" + thesisId + "/defenses/request", a.mentor,
                 Map.of("room", "X1", "scheduledAt", when))
                 .andExpect(status().isForbidden());
-        // Student cannot schedule → 403.
-        doPost("/api/theses/" + thesisId + "/defenses", a.student,
+        // STUDENT_SERVICE cannot propose one either — only the owning student may → 403.
+        doPost("/api/theses/" + thesisId + "/defenses/request", a.service,
                 Map.of("room", "X1", "scheduledAt", when))
                 .andExpect(status().isForbidden());
 
-        // Still awaiting scheduling; no Defense row created by the rejected calls.
+        // Still awaiting a proposal; no DefenseRequest/Defense row created by the rejected calls.
         assertEquals(ThesisStatus.PENDING_DEFENSE_SCHEDULING, reload(thesisId).getStatus());
         assertEquals(true, defenseRepository.findByThesis(reload(thesisId)).isEmpty());
+        assertEquals(true,
+                defenseRequestRepository.findByThesisAndStatus(reload(thesisId), com.praksa.model.enums.DefenseRequestStatus.PENDING).isEmpty());
+
+        // Student submits the proposal.
+        requestDefense(a.student, thesisId, "X1", when);
+
+        // Mentor/student cannot decide it → 403.
+        doPatch("/api/theses/" + thesisId + "/defenses/request/decision", a.mentor,
+                Map.of("approved", true))
+                .andExpect(status().isForbidden());
+        doPatch("/api/theses/" + thesisId + "/defenses/request/decision", a.student,
+                Map.of("approved", true))
+                .andExpect(status().isForbidden());
+        assertEquals(ThesisStatus.PENDING_DEFENSE_SCHEDULING, reload(thesisId).getStatus());
 
         // STUDENT_SERVICE succeeds.
-        scheduleDefense(a.service, thesisId, "X1", when);
+        approveDefenseRequest(a.service, thesisId);
         assertEquals(ThesisStatus.DEFENSE_SCHEDULED, reload(thesisId).getStatus());
     }
 
@@ -198,20 +212,23 @@ class AuthorizationWorkflowIntegrationTest extends AbstractWorkflowIntegrationTe
     }
 
     @Test
-    @DisplayName("Invalid: scheduling a defense before the thesis is ready is rejected and creates no Defense row")
-    void invalid_scheduleDefenseTooEarly_noDefenseRow() throws Exception {
+    @DisplayName("Invalid: proposing a defense before the thesis is ready is rejected and creates no request/Defense row")
+    void invalid_defenseRequestTooEarly_noRowsCreated() throws Exception {
         Actors a = newActors();
         UUID thesisId = advanceToInProgress(a); // IN_PROGRESS — nowhere near defense scheduling
 
         OffsetDateTime when = OffsetDateTime.now().plusDays(6);
-        // STUDENT_SERVICE has the role, but the status is not PENDING_DEFENSE_SCHEDULING/DEFENSE_SCHEDULED → 400.
-        doPost("/api/theses/" + thesisId + "/defenses", a.service,
+        // The student has the role and owns the thesis, but the status is not
+        // PENDING_DEFENSE_SCHEDULING/eligible-DEFENSE_SCHEDULED → 400.
+        doPost("/api/theses/" + thesisId + "/defenses/request", a.student,
                 Map.of("room", "Z9", "scheduledAt", when))
                 .andExpect(status().isBadRequest());
 
         assertEquals(ThesisStatus.IN_PROGRESS, reload(thesisId).getStatus());
         assertEquals(true, defenseRepository.findByThesis(reload(thesisId)).isEmpty(),
-                "no Defense row created by a rejected schedule");
+                "no Defense row created by a rejected proposal");
+        assertEquals(0, defenseRequestRepository.findByThesisOrderByCreatedAtDesc(reload(thesisId)).size(),
+                "no DefenseRequest row created by a rejected proposal");
     }
 
     @Test
@@ -235,8 +252,9 @@ class AuthorizationWorkflowIntegrationTest extends AbstractWorkflowIntegrationTe
         assertEquals(notifBefore, totalNotifications(thesisId),
                 "no DEFENSE_ELIGIBILITY_VERIFIED notification on a failed verification");
 
-        // A student cannot request a defense while still PENDING_DEFENSE_CHECK (must be verified first) → 400.
-        doPost("/api/theses/" + thesisId + "/defenses/request", a.student, null)
+        // A student cannot propose a defense while still PENDING_DEFENSE_CHECK (must be verified first) → 400.
+        doPost("/api/theses/" + thesisId + "/defenses/request", a.student,
+                Map.of("room", "X1", "scheduledAt", OffsetDateTime.now().plusDays(7)))
                 .andExpect(status().isBadRequest());
         assertEquals(ThesisStatus.PENDING_DEFENSE_CHECK, reload(thesisId).getStatus());
     }

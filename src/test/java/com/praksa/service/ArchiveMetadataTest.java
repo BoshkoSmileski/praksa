@@ -2,9 +2,11 @@ package com.praksa.service;
 
 import com.praksa.dto.defense.RecordResultRequest;
 import com.praksa.exception.BadRequestException;
+import com.praksa.model.CommitteeMember;
 import com.praksa.model.Defense;
 import com.praksa.model.Thesis;
 import com.praksa.model.User;
+import com.praksa.model.enums.MemberRole;
 import com.praksa.model.enums.Role;
 import com.praksa.model.enums.ThesisStatus;
 import com.praksa.repository.CommitteeMemberRepository;
@@ -40,6 +42,11 @@ import static org.mockito.Mockito.when;
  * The ONLY place a thesis becomes ARCHIVED is DefenseResultServiceImpl.recordResult, so
  * these pure-Mockito tests drive that method and assert the four metadata fields:
  *   archiveRegistrationNumber, archiveDate, archivedBy (→ archivedByName), archiveNotes.
+ *
+ * All grades exercised here are 6-10 (successful defense). Grade 5 (official faculty rule:
+ * "not defended" → DEFENSE_FAILED, no archive metadata) is covered separately by
+ * {@link DefenseGradeOutcomeTest}, which asserts these same four fields stay null for a
+ * failed defense.
  */
 @ExtendWith(MockitoExtension.class)
 class ArchiveMetadataTest {
@@ -76,11 +83,18 @@ class ArchiveMetadataTest {
         return r;
     }
 
+    /** A voting (non-external) committee seat for {@code recorder} on {@code thesis}. */
+    private CommitteeMember votingSeat(Thesis thesis, User recorder) {
+        return CommitteeMember.builder().id(UUID.randomUUID()).thesis(thesis).professor(recorder)
+                .memberRole(MemberRole.FORMAL_MEMBER).isExternalNonVoting(false).build();
+    }
+
     private void stubHappyPath(User recorder, Thesis thesis, Defense defense, long existingCount) {
         when(securityUtils.getCurrentUser()).thenReturn(recorder);
         when(thesisRepository.findById(thesis.getId())).thenReturn(Optional.of(thesis));
-        // Recorder holds a seat on THIS thesis's committee (write-side grading authorization).
-        when(committeeRepository.existsByThesisAndProfessor(thesis, recorder)).thenReturn(true);
+        // Recorder holds a VOTING seat on THIS thesis's committee (write-side grading authorization).
+        when(committeeRepository.findByThesisAndProfessor(thesis, recorder))
+                .thenReturn(Optional.of(votingSeat(thesis, recorder)));
         when(defenseRepository.findById(defense.getId())).thenReturn(Optional.of(defense));
         when(resultRepository.findByDefense(defense)).thenReturn(Optional.empty());
         when(thesisRepository.countByArchiveRegistrationNumberStartingWith(anyString())).thenReturn(existingCount);
@@ -184,8 +198,10 @@ class ArchiveMetadataTest {
 
         when(securityUtils.getCurrentUser()).thenReturn(committee);
         when(thesisRepository.findById(thesis.getId())).thenReturn(Optional.of(thesis));
-        // Seated committee member: authorization passes, so the cancelled-defense rule is what rejects.
-        when(committeeRepository.existsByThesisAndProfessor(thesis, committee)).thenReturn(true);
+        // Seated voting committee member: authorization passes, so the cancelled-defense rule
+        // is what rejects.
+        when(committeeRepository.findByThesisAndProfessor(thesis, committee))
+                .thenReturn(Optional.of(votingSeat(thesis, committee)));
         when(defenseRepository.findById(cancelled.getId())).thenReturn(Optional.of(cancelled));
 
         assertThrows(BadRequestException.class,

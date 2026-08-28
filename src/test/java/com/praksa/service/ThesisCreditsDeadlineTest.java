@@ -194,6 +194,54 @@ class ThesisCreditsDeadlineTest {
         verify(applicationPdfService).generate(thesis);
     }
 
+    // ---------------------------------------------------------------- applicationSubmittedAt (14-day defense-request rule)
+
+    @Test
+    @DisplayName("submitApplication stamps applicationSubmittedAt to ~now")
+    void submit_stampsApplicationSubmittedAt() {
+        User s = student(240);
+        Thesis thesis = Thesis.builder().id(UUID.randomUUID()).title("T").student(s)
+                .status(ThesisStatus.APPLICATION_SUBMITTED)
+                .createdAt(OffsetDateTime.now().minusDays(1))
+                .submissionDeadline(OffsetDateTime.now().plusDays(20))
+                .build();
+
+        when(securityUtils.getCurrentUser()).thenReturn(s);
+        when(thesisRepository.findById(thesis.getId())).thenReturn(Optional.of(thesis));
+        when(applicationPdfService.generate(thesis)).thenReturn("/uploads/app.pdf");
+
+        OffsetDateTime before = OffsetDateTime.now();
+        thesisService.submitApplication(thesis.getId());
+        OffsetDateTime after = OffsetDateTime.now();
+
+        assertNotNull(thesis.getApplicationSubmittedAt());
+        org.junit.jupiter.api.Assertions.assertTrue(
+                !thesis.getApplicationSubmittedAt().isBefore(before) && !thesis.getApplicationSubmittedAt().isAfter(after),
+                "applicationSubmittedAt should be stamped to ~now");
+    }
+
+    @Test
+    @DisplayName("Resubmitting after a rejection re-stamps applicationSubmittedAt to a fresh timestamp")
+    void resubmitAfterRejection_reStampsApplicationSubmittedAt() {
+        User s = student(240);
+        OffsetDateTime stale = OffsetDateTime.now().minusDays(40);
+        Thesis thesis = Thesis.builder().id(UUID.randomUUID()).title("T").student(s)
+                .status(ThesisStatus.APPLICATION_REJECTED_BY_ARCHIVE)
+                .createdAt(OffsetDateTime.now().minusDays(50))
+                .submissionDeadline(OffsetDateTime.now().plusDays(20))
+                .applicationSubmittedAt(stale)
+                .build();
+
+        when(securityUtils.getCurrentUser()).thenReturn(s);
+        when(thesisRepository.findById(thesis.getId())).thenReturn(Optional.of(thesis));
+        when(applicationPdfService.generate(thesis)).thenReturn("/uploads/app.pdf");
+
+        thesisService.submitApplication(thesis.getId());
+
+        org.junit.jupiter.api.Assertions.assertTrue(thesis.getApplicationSubmittedAt().isAfter(stale),
+                "a resubmission is a fresh formal submission event and must reset the 14-day clock");
+    }
+
     @Test
     @DisplayName("Deadline is measured with real month arithmetic (not a fixed 30-day span)")
     void create_deadlineUsesCalendarMonth() {

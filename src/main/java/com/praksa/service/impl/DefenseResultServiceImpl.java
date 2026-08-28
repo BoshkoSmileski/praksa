@@ -50,6 +50,13 @@ public class DefenseResultServiceImpl implements DefenseResultService {
     private static final int MIN_DEFENSE_GRADE = 5;
     private static final int MAX_DEFENSE_GRADE = 10;
 
+    /**
+     * Official faculty rule: grade 5 means the thesis was NOT successfully defended.
+     * Grades 6-10 are a successful defense. Only MIN_DEFENSE_GRADE is the failing grade —
+     * every other valid grade (6-10) archives the thesis exactly as before.
+     */
+    private static final int FAILING_GRADE = 5;
+
     @Override
     @Transactional
     public DefenseResultResponse recordResult(UUID thesisId, UUID defenseId, RecordResultRequest request) {
@@ -64,42 +71,49 @@ public class DefenseResultServiceImpl implements DefenseResultService {
 
         Thesis thesis = findThesis(thesisId);
 
-        // ─── Write-side authorization (P1 grading IDOR / BUG-13) ──────────────
+        // ─── Write-side authorization (P1 grading IDOR / BUG-13 + external non-voting rule) ──
         // Recording a grade also archives the thesis, so it must be restricted to a professor
-        // who ACTUALLY SITS on THIS thesis's committee — never granted by role alone. Merely
-        // holding the COMMITTEE role, sitting on some OTHER thesis's committee, being the
-        // thesis owner, or knowing the thesis/defense UUID is NOT sufficient. The membership
-        // check uses the requested thesis and the authenticated professor, reusing the same
-        // repository mechanism as the read-access policy (existsByThesisAndProfessor).
+        // who ACTUALLY SITS on THIS thesis's committee AND holds a VOTING seat — never granted
+        // by role alone. Merely holding the COMMITTEE role, sitting on some OTHER thesis's
+        // committee, being the thesis owner, or knowing the thesis/defense UUID is NOT
+        // sufficient. Official faculty procedure additionally excludes the optional external
+        // professional: they hold a real seat (and may read/participate) but are explicitly
+        // NON-VOTING, so they must never be able to record a defense grade even though they are
+        // a genuine committee member. The membership+voting check uses the requested thesis and
+        // the authenticated professor, reusing the same repository mechanism as the read-access
+        // policy (findByThesisAndProfessor — the row-returning sibling of
+        // existsByThesisAndProfessor, needed here because a yes/no answer is not enough: we must
+        // also inspect isExternalNonVoting on the actual seat).
         //
-        // Committee seats are only ever held by professors (the mentor as MENTOR_MEMBER + two
-        // FORMAL_MEMBERs). Administrative roles (STUDENT_SERVICE, ARCHIVE) and the STUDENT owner
-        // never hold a seat and are therefore denied here — this resolves BUG-13 ("the spec says
-        // only the committee grades") together with the previously un-scoped COMMITTEE check.
+        // Committee seats are only ever held by professors (the mentor as MENTOR_MEMBER + two or
+        // three FORMAL_MEMBERs, at most one of which is external non-voting). Administrative
+        // roles (STUDENT_SERVICE, ARCHIVE) and the STUDENT owner never hold a seat and are
+        // therefore denied here — this resolves BUG-13 ("the spec says only the committee
+        // grades") together with the previously un-scoped COMMITTEE check.
         //
         // Runs BEFORE the status check and before any DefenseResult save, status transition,
-        // history row, archive metadata, or notification — so an unauthorized request mutates
-        // nothing.
-        requireCommitteeSeat(thesis, recorder);
+        // history row, archive metadata, or notification — so an unauthorized request (including
+        // a genuinely-seated external member) mutates nothing.
+        requireVotingCommitteeSeat(thesis, recorder);
 
         requireStatus(thesis, ThesisStatus.DEFENSE_SCHEDULED);
 
         Defense defense = defenseRepository.findById(defenseId)
-                .orElseThrow(() -> new ResourceNotFoundException("Defense not found: " + defenseId));
+                .orElseThrow(() -> new ResourceNotFoundException("Одбраната не е пронајдена: " + defenseId));
 
         // Ensure this defense belongs to the correct thesis
         if (!defense.getThesis().getId().equals(thesisId)) {
-            throw new BadRequestException("Defense does not belong to this thesis");
+            throw new BadRequestException("Одбраната не припаѓа на оваа дипломска работа.");
         }
 
         // Cannot record a result for a cancelled defense
         if (defense.isCancelled()) {
-            throw new BadRequestException("Cannot record a result for a cancelled defense");
+            throw new BadRequestException("Не може да се внесе резултат за откажана одбрана.");
         }
 
         // Prevent recording a result twice for the same defense
         if (resultRepository.findByDefense(defense).isPresent()) {
-            throw new BadRequestException("A result has already been recorded for this defense");
+            throw new BadRequestException("Веќе е внесен резултат за оваа одбрана.");
         }
 
         DefenseResult result = DefenseResult.builder()
@@ -111,6 +125,42 @@ public class DefenseResultServiceImpl implements DefenseResultService {
 
         resultRepository.save(result);
 
+        // ─── Branch on the official faculty outcome rule ──────────────────
+        // Grade 5 = defense NOT passed → DEFENSE_FAILED, no archive metadata, one
+        // notification. Grades 6-10 = successful defense → ARCHIVED exactly as before.
+        if (request.getGrade() == FAILING_GRADE) {
+            recordDefenseFailure(thesis, recorder);
+        } else {
+            recordSuccessfulArchive(thesis, recorder, result);
+        }
+
+        return DefenseResultResponse.from(result);
+    }
+
+    /**
+     * Grade 5 path. The thesis is NOT archived: no registration number, no archive date,
+     * no archivedBy — those fields are exclusively populated by {@link #recordSuccessfulArchive}.
+     * The DefenseResult (grade = 5) and the Defense/committee history are all preserved
+     * untouched; only the status moves, through the same audited transitionStatus() helper.
+     * Because DEFENSE_FAILED is excluded from ThesisServiceImpl#isActiveStatus, the student
+     * is immediately free to submit a new thesis application (or, if the workflow allows it
+     * for the future topic, continue reworking) without being blocked by the one-active-
+     * thesis rule.
+     */
+    private void recordDefenseFailure(Thesis thesis, User recorder) {
+        transitionStatus(thesis, ThesisStatus.DEFENSE_FAILED, recorder);
+
+        // Exactly one notification for a failed defense — no THESIS_GRADED / THESIS_ARCHIVED
+        // (those are reserved for a successful archive). Primitive String only.
+        notificationService.notify(thesis.getStudent(), thesis, NotificationType.DEFENSE_FAILED_CAN_REAPPLY,
+                "Одбраната на вашата дипломска работа беше оценета со 5 и не е успешно положена. Може да ја "
+                        + "преработите темата или да поднесете нова пријава за дипломска работа согласно факултетската процедура.");
+    }
+
+    /**
+     * Grades 6-10 path — the pre-existing successful archive behavior, unchanged.
+     */
+    private void recordSuccessfulArchive(Thesis thesis, User recorder, DefenseResult result) {
         // ─── Assign archive metadata ──────────────────────────────────────
         // Done BEFORE the status transition so the saved thesis has all fields populated.
         // Once set, the registration number is immutable (no update endpoint exposes it).
@@ -130,12 +180,10 @@ public class DefenseResultServiceImpl implements DefenseResultService {
         // carries the registration number — both primitive Strings, safe across the async
         // boundary. This is the single place these two events occur, so no duplicates.
         notificationService.notify(thesis.getStudent(), thesis, NotificationType.THESIS_GRADED,
-                "Your thesis defense has been graded. Grade: " + result.getGrade() + ".");
+                "Одбраната на вашата дипломска работа е оценета. Оценка: " + result.getGrade() + ".");
         notificationService.notify(thesis.getStudent(), thesis, NotificationType.THESIS_ARCHIVED,
-                "Congratulations! Your thesis has been defended and archived under registration number "
+                "Честитки! Вашата дипломска работа е одбранета и архивирана под регистарски број "
                         + thesis.getArchiveRegistrationNumber() + ".");
-
-        return DefenseResultResponse.from(result);
     }
 
     /**
@@ -153,10 +201,10 @@ public class DefenseResultServiceImpl implements DefenseResultService {
     @Transactional(readOnly = true)
     public DefenseResultResponse getResult(UUID thesisId, UUID defenseId) {
         Defense defense = defenseRepository.findById(defenseId)
-                .orElseThrow(() -> new ResourceNotFoundException("Defense not found: " + defenseId));
+                .orElseThrow(() -> new ResourceNotFoundException("Одбраната не е пронајдена: " + defenseId));
 
         if (!defense.getThesis().getId().equals(thesisId)) {
-            throw new BadRequestException("Defense does not belong to this thesis");
+            throw new BadRequestException("Одбраната не припаѓа на оваа дипломска работа.");
         }
 
         // Grades are sensitive: authorize against the underlying thesis (owner / assigned mentor
@@ -165,7 +213,7 @@ public class DefenseResultServiceImpl implements DefenseResultService {
         thesisReadAccessPolicy.requireReadAccess(defense.getThesis(), securityUtils.getCurrentUser());
 
         DefenseResult result = resultRepository.findByDefense(defense)
-                .orElseThrow(() -> new ResourceNotFoundException("No result recorded yet for this defense"));
+                .orElseThrow(() -> new ResourceNotFoundException("Сè уште нема внесено резултат за оваа одбрана."));
 
         return DefenseResultResponse.from(result);
     }
@@ -174,13 +222,13 @@ public class DefenseResultServiceImpl implements DefenseResultService {
     @Transactional(readOnly = true)
     public byte[] generateRecordPdf(UUID thesisId, UUID defenseId) {
         Defense defense = defenseRepository.findById(defenseId)
-                .orElseThrow(() -> new ResourceNotFoundException("Defense not found: " + defenseId));
+                .orElseThrow(() -> new ResourceNotFoundException("Одбраната не е пронајдена: " + defenseId));
 
         Thesis thesis = defense.getThesis();
         // The defense must belong to the thesis in the path — otherwise the UUIDs are
         // being mixed and matched to probe records; reject rather than serve.
         if (!thesis.getId().equals(thesisId)) {
-            throw new BadRequestException("Defense does not belong to this thesis");
+            throw new BadRequestException("Одбраната не припаѓа на оваа дипломска работа.");
         }
 
         // Server-side authorization is the security boundary (NOT the frontend button).
@@ -194,7 +242,7 @@ public class DefenseResultServiceImpl implements DefenseResultService {
         // present result guarantees the archive registration number is populated too.
         DefenseResult result = resultRepository.findByDefense(defense)
                 .orElseThrow(() -> new BadRequestException(
-                        "The defense record is available only after the defense has been graded"));
+                        "Записникот за одбраната е достапен дури откако одбраната ќе биде оценета."));
 
         List<CommitteeMember> committee = committeeRepository.findByThesis(thesis);
 
@@ -219,7 +267,7 @@ public class DefenseResultServiceImpl implements DefenseResultService {
                 || (user.getRole() == Role.ARCHIVE)
                 || committeeRepository.existsByThesisAndProfessor(thesis, user);
         if (!allowed) {
-            throw new UnauthorizedException("You do not have access to this defense record");
+            throw new UnauthorizedException("Немате пристап до овој записник за одбрана.");
         }
     }
 
@@ -228,36 +276,43 @@ public class DefenseResultServiceImpl implements DefenseResultService {
     // -------------------------------------------------------------------------
 
     /**
-     * Write-side grading authorization: only a seated member of THIS thesis's committee may
-     * record its defense grade. Uses {@link CommitteeMemberRepository#existsByThesisAndProfessor}
-     * — the same thesis-scoped mechanism the read-access policy uses — so grading can never be
-     * authorized by global role, by a seat on a different thesis, or by knowledge of the UUID.
-     * Because committee seats are held only by professors, this inherently excludes
-     * STUDENT_SERVICE, ARCHIVE, and the STUDENT owner (none of whom ever hold a seat).
+     * Write-side grading authorization: only a VOTING seated member of THIS thesis's committee
+     * may record its defense grade. Uses
+     * {@link CommitteeMemberRepository#findByThesisAndProfessor} — the same thesis-scoped
+     * mechanism the read-access policy's existence check is built on, but returning the actual
+     * seat row so its voting eligibility can be inspected — so grading can never be authorized
+     * by global role, by a seat on a different thesis, or by knowledge of the UUID. Because
+     * committee seats are held only by professors, this inherently excludes STUDENT_SERVICE,
+     * ARCHIVE, and the STUDENT owner (none of whom ever hold a seat). A genuinely seated but
+     * external non-voting member (official faculty procedure) is rejected too — holding a seat
+     * is necessary but not sufficient; the seat must also be a voting one.
      */
-    private void requireCommitteeSeat(Thesis thesis, User recorder) {
-        if (!committeeRepository.existsByThesisAndProfessor(thesis, recorder)) {
+    private void requireVotingCommitteeSeat(Thesis thesis, User recorder) {
+        CommitteeMember seat = committeeRepository.findByThesisAndProfessor(thesis, recorder)
+                .orElseThrow(() -> new UnauthorizedException(
+                        "Само член на комисијата за одбрана на оваа дипломска работа може да ја внесе оценката."));
+        if (seat.isExternalNonVoting()) {
             throw new UnauthorizedException(
-                    "Only a member of this thesis's defense committee can record the grade");
+                    "Надворешниот член на комисијата без право на глас не може да внесе оценка за одбрана.");
         }
     }
 
     private void validateGrade(Integer grade) {
         if (grade == null || grade < MIN_DEFENSE_GRADE || grade > MAX_DEFENSE_GRADE) {
             throw new BadRequestException(
-                    "Defense grade must be between " + MIN_DEFENSE_GRADE + " and " + MAX_DEFENSE_GRADE + " (inclusive)");
+                    "Оценката за одбрана мора да биде помеѓу " + MIN_DEFENSE_GRADE + " и " + MAX_DEFENSE_GRADE + " (вклучително).");
         }
     }
 
     private Thesis findThesis(UUID id) {
         return thesisRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Thesis not found: " + id));
+                .orElseThrow(() -> new ResourceNotFoundException("Дипломската работа не е пронајдена: " + id));
     }
 
     private void requireStatus(Thesis thesis, ThesisStatus required) {
         if (thesis.getStatus() != required) {
             throw new BadRequestException(
-                    "Invalid status. Expected: " + required + ", current: " + thesis.getStatus());
+                    "Невалиден статус. Очекуван: " + required + ", тековен: " + thesis.getStatus());
         }
     }
 

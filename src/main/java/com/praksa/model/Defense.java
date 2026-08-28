@@ -8,7 +8,9 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 
 @Entity
-@Table(name = "defenses")
+@Table(name = "defenses", indexes = {
+        @Index(name = "idx_defenses_room", columnList = "room")
+})
 @Getter
 @Setter
 @NoArgsConstructor

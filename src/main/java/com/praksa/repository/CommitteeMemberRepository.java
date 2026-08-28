@@ -19,6 +19,11 @@ public interface CommitteeMemberRepository extends JpaRepository<CommitteeMember
     // Prevents adding the same professor twice to the same committee
     boolean existsByThesisAndProfessor(Thesis thesis, User professor);
 
+    // The actual seat row for a professor on a specific thesis — used where the caller needs
+    // more than a yes/no answer, e.g. write-side grading authorization must also inspect
+    // isExternalNonVoting (an external non-voting member holds a real seat but may not grade).
+    Optional<CommitteeMember> findByThesisAndProfessor(Thesis thesis, User professor);
+
     // Finds the mentor's own committee record (to avoid re-adding them)
     Optional<CommitteeMember> findByThesisAndMemberRole(Thesis thesis, MemberRole memberRole);
 }

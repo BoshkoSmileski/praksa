@@ -1,9 +1,10 @@
 package com.praksa.controller;
 
 import com.praksa.dto.ApiResponse;
+import com.praksa.dto.defense.DefenseRequestCreateRequest;
+import com.praksa.dto.defense.DefenseRequestDecisionRequest;
+import com.praksa.dto.defense.DefenseRequestResponse;
 import com.praksa.dto.defense.DefenseResponse;
-import com.praksa.dto.defense.ScheduleDefenseRequest;
-import com.praksa.dto.thesis.ThesisResponse;
 import com.praksa.service.DefenseResultService;
 import com.praksa.service.DefenseService;
 import jakarta.validation.Valid;
@@ -25,19 +26,29 @@ public class DefenseController {
     private final DefenseResultService resultService;
 
     // POST /api/theses/{thesisId}/defenses/request
-    // STUDENT asks to defend. Thesis → PENDING_DEFENSE_SCHEDULING. No room/date yet.
+    // STUDENT proposes the room + date/time they want to defend at. Stored as a PENDING
+    // DefenseRequest — no Defense row yet, no thesis status change.
     @PostMapping("/request")
-    public ResponseEntity<ApiResponse<ThesisResponse>> request(@PathVariable UUID thesisId) {
-        return ResponseEntity.ok(ApiResponse.ok(defenseService.requestDefense(thesisId)));
+    public ResponseEntity<ApiResponse<DefenseRequestResponse>> createRequest(
+            @PathVariable UUID thesisId,
+            @Valid @RequestBody DefenseRequestCreateRequest request) {
+        return ResponseEntity.ok(ApiResponse.ok(defenseService.createDefenseRequest(thesisId, request)));
     }
 
-    // POST /api/theses/{thesisId}/defenses
-    // STUDENT_SERVICE schedules (or reschedules) the defense with room + date/time.
-    @PostMapping
-    public ResponseEntity<ApiResponse<DefenseResponse>> schedule(
+    // PATCH /api/theses/{thesisId}/defenses/request/decision
+    // STUDENT_SERVICE approves or rejects the thesis's current PENDING request.
+    @PatchMapping("/request/decision")
+    public ResponseEntity<ApiResponse<DefenseRequestResponse>> decideRequest(
             @PathVariable UUID thesisId,
-            @Valid @RequestBody ScheduleDefenseRequest request) {
-        return ResponseEntity.ok(ApiResponse.ok(defenseService.scheduleDefense(thesisId, request)));
+            @Valid @RequestBody DefenseRequestDecisionRequest request) {
+        return ResponseEntity.ok(ApiResponse.ok(defenseService.decideDefenseRequest(thesisId, request)));
+    }
+
+    // GET /api/theses/{thesisId}/defenses/request
+    // Full proposal history for this thesis (current + past rejected/approved), thesis-scoped.
+    @GetMapping("/request")
+    public ResponseEntity<ApiResponse<List<DefenseRequestResponse>>> getRequests(@PathVariable UUID thesisId) {
+        return ResponseEntity.ok(ApiResponse.ok(defenseService.getDefenseRequests(thesisId)));
     }
 
     // GET /api/theses/{thesisId}/defenses/active

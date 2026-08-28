@@ -68,7 +68,7 @@ public class ThesisReadAccessPolicy {
      */
     public void requireReadAccess(Thesis thesis, User user) {
         if (!hasReadAccess(thesis, user)) {
-            throw new UnauthorizedException("You do not have access to this thesis");
+            throw new UnauthorizedException("Немате пристап до оваа дипломска работа.");
         }
     }
 }

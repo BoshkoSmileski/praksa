@@ -34,6 +34,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.net.MalformedURLException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -70,7 +71,7 @@ public class ThesisVersionServiceImpl implements ThesisVersionService {
         if (thesis.getStatus() != ThesisStatus.IN_PROGRESS
                 && thesis.getStatus() != ThesisStatus.FINAL_SUBMITTED) {
             throw new BadRequestException(
-                    "Versions can only be uploaded while thesis is IN_PROGRESS or FINAL_SUBMITTED");
+                    "Верзии може да се прикачуваат само додека дипломската работа е во статус IN_PROGRESS или FINAL_SUBMITTED.");
         }
 
         // Determine the next version number.
@@ -101,6 +102,11 @@ public class ThesisVersionServiceImpl implements ThesisVersionService {
             throw new RuntimeException("Failed to save version record. File upload rolled back.", e);
         }
 
+        // Reset the 45-day mentor-review-deadline clock. Only stamped here — on a
+        // genuinely successful upload — never on a mere read of a version.
+        thesis.setLastVersionSubmittedAt(OffsetDateTime.now());
+        thesisRepository.save(thesis);
+
         return ThesisVersionResponse.from(version);
     }
 
@@ -118,7 +124,7 @@ public class ThesisVersionServiceImpl implements ThesisVersionService {
         requireOwner(thesis, student);
 
         if (thesis.getStatus() != ThesisStatus.IN_PROGRESS) {
-            throw new BadRequestException("Can only mark a final version while thesis is IN_PROGRESS");
+            throw new BadRequestException("Финална верзија може да се означи само додека дипломската работа е во статус IN_PROGRESS.");
         }
 
         // Clear the final flag from any previously marked version.
@@ -184,7 +190,7 @@ public class ThesisVersionServiceImpl implements ThesisVersionService {
 
         ThesisVersion version = findVersion(versionId, thesis);
         if (!canSeeVersion(thesis, version, user)) {
-            throw new UnauthorizedException("You do not have access to this thesis version");
+            throw new UnauthorizedException("Немате пристап до оваа верзија на дипломската работа.");
         }
 
         try {
@@ -192,7 +198,7 @@ public class ThesisVersionServiceImpl implements ThesisVersionService {
             Resource resource = new UrlResource(filePath.toUri());
 
             if (!resource.exists() || !resource.isReadable()) {
-                throw new ResourceNotFoundException("File not found on disk for version: " + versionId);
+                throw new ResourceNotFoundException("Датотеката не е пронајдена за верзијата: " + versionId);
             }
 
             return resource;
@@ -220,7 +226,7 @@ public class ThesisVersionServiceImpl implements ThesisVersionService {
                 && thesis.getMentor().getId().equals(author.getId());
 
         if (!isStudent && !isMentor) {
-            throw new UnauthorizedException("Only the thesis student or assigned mentor can add comments");
+            throw new UnauthorizedException("Само студентот или назначениот ментор на дипломската работа можат да додаваат коментари.");
         }
 
         ThesisVersion version = findVersion(versionId, thesis);
@@ -247,7 +253,7 @@ public class ThesisVersionServiceImpl implements ThesisVersionService {
         // Comments follow the visibility of the underlying version — a committee
         // member cannot read comments on a draft they aren't allowed to see.
         if (!canSeeVersion(thesis, version, user)) {
-            throw new UnauthorizedException("You do not have access to comments on this thesis version");
+            throw new UnauthorizedException("Немате пристап до коментарите на оваа верзија.");
         }
 
         return commentRepository.findByVersionOrderByCreatedAtAsc(version)
@@ -262,28 +268,28 @@ public class ThesisVersionServiceImpl implements ThesisVersionService {
 
     private Thesis findThesis(UUID id) {
         return thesisRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Thesis not found: " + id));
+                .orElseThrow(() -> new ResourceNotFoundException("Дипломската работа не е пронајдена: " + id));
     }
 
     private ThesisVersion findVersion(UUID versionId, Thesis thesis) {
         ThesisVersion version = versionRepository.findById(versionId)
-                .orElseThrow(() -> new ResourceNotFoundException("Version not found: " + versionId));
+                .orElseThrow(() -> new ResourceNotFoundException("Верзијата не е пронајдена: " + versionId));
         // Ensure the version actually belongs to this thesis
         if (!version.getThesis().getId().equals(thesis.getId())) {
-            throw new BadRequestException("Version does not belong to this thesis");
+            throw new BadRequestException("Верзијата не припаѓа на оваа дипломска работа.");
         }
         return version;
     }
 
     private void requireRole(User user, Role required) {
         if (user.getRole() != required) {
-            throw new UnauthorizedException("This action requires role: " + required);
+            throw new UnauthorizedException("Оваа акција бара улога: " + required);
         }
     }
 
     private void requireOwner(Thesis thesis, User user) {
         if (!thesis.getStudent().getId().equals(user.getId())) {
-            throw new UnauthorizedException("You do not own this thesis");
+            throw new UnauthorizedException("Не сте сопственик на оваа дипломска работа.");
         }
     }
 
@@ -323,7 +329,7 @@ public class ThesisVersionServiceImpl implements ThesisVersionService {
         if (user.getRole() == Role.STUDENT_SERVICE) return;
         if (user.getRole() == Role.ARCHIVE) return;
         if (isCommitteeMember(thesis, user)) return;
-        throw new UnauthorizedException("You do not have access to this thesis");
+        throw new UnauthorizedException("Немате пристап до оваа дипломска работа.");
     }
 
     /**

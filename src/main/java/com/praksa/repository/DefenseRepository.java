@@ -17,6 +17,13 @@ public interface DefenseRepository extends JpaRepository<Defense, UUID> {
     Optional<Defense> findByThesisAndIsCancelledFalse(Thesis thesis);
 
     /**
+     * Every non-cancelled defense currently booked in a room. Used by the defense-request
+     * approval flow to detect a double-booking. Cancelled defenses are excluded so they never
+     * block room availability.
+     */
+    List<Defense> findByRoomAndIsCancelledFalse(String room);
+
+    /**
      * Active defenses scheduled within the given time window for which no reminder has been sent.
      * Used by the scheduled job that sends the 24h-pre reminder.
      */

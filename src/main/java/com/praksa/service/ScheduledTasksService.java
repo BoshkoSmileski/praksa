@@ -9,6 +9,7 @@ import com.praksa.model.enums.NotificationType;
 import com.praksa.model.enums.ThesisStatus;
 import com.praksa.repository.CommitteeMemberRepository;
 import com.praksa.repository.DefenseRepository;
+import com.praksa.repository.NotificationRepository;
 import com.praksa.repository.ThesisRepository;
 import com.praksa.repository.ThesisStatusHistoryRepository;
 import lombok.RequiredArgsConstructor;
@@ -39,6 +40,7 @@ public class ScheduledTasksService {
     private static final long COMMITTEE_REVIEW_BUSINESS_DAYS = 5;
     private static final long DEFENSE_REMINDER_WINDOW_HOURS_MIN = 23;
     private static final long DEFENSE_REMINDER_WINDOW_HOURS_MAX = 25;
+    private static final long MENTOR_REVIEW_DEADLINE_DAYS = 45;
 
     /**
      * Statuses that mean the formal thesis application has NOT yet been successfully
@@ -60,6 +62,7 @@ public class ScheduledTasksService {
     private final ThesisStatusHistoryRepository statusHistoryRepository;
     private final DefenseRepository defenseRepository;
     private final CommitteeMemberRepository committeeRepository;
+    private final NotificationRepository notificationRepository;
     private final NotificationService notificationService;
 
     /**
@@ -110,9 +113,11 @@ public class ScheduledTasksService {
             // Notify everyone involved that the review was auto-accepted after 5 business
             // days of silence. The mentor holds a MENTOR_MEMBER committee seat (a thesis can
             // only reach COMMITTEE_REVIEW via approveCommittee, which requires an approved
-            // 3-member committee including the auto-added mentor), so iterating the committee
-            // already notifies the mentor exactly once — mirroring the manual
-            // acceptCommitteeReview flow and avoiding a duplicate mentor notification.
+            // 3- or 4-member committee including the auto-added mentor), so iterating the
+            // committee already notifies the mentor exactly once — mirroring the manual
+            // acceptCommitteeReview flow and avoiding a duplicate mentor notification. Any
+            // external non-voting member is a genuine seat and is notified like every other
+            // member — the voting restriction only applies to recording a defense grade.
             notificationService.notify(thesis.getStudent(), thesis, NotificationType.COMMITTEE_REVIEW_AUTO_ADVANCED);
             for (CommitteeMember m : committeeRepository.findByThesis(thesis)) {
                 notificationService.notify(m.getProfessor(), thesis, NotificationType.COMMITTEE_REVIEW_AUTO_ADVANCED);
@@ -231,6 +236,56 @@ public class ScheduledTasksService {
             // Never let a retry-run failure kill the scheduled thread — the next run should
             // still fire. Per-notification isolation lives in the service; this is a backstop.
             log.error("[ScheduledTasks] Notification retry job failed: {}", e.getMessage());
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // JOB 5 — Remind the mentor when a submitted thesis version has waited more
+    // than 45 days for review (official faculty procedure)
+    //
+    // Runs once daily. STATUS IS NEVER CHANGED here — the job only notifies.
+    // Finds IN_PROGRESS theses with an assigned mentor whose most recently uploaded
+    // version (Thesis.lastVersionSubmittedAt) is older than 45 days, and sends the
+    // mentor exactly one MENTOR_REVIEW_DEADLINE_EXCEEDED notification per submission
+    // cycle. Deduplication reuses the existing notification data (no new schema): a
+    // reminder is skipped if one already exists for this (thesis, mentor) pair created
+    // AFTER the thesis's CURRENT lastVersionSubmittedAt. Uploading a new version
+    // advances lastVersionSubmittedAt, which — without touching any old notification
+    // row — automatically makes the old reminder "stale" for this check and allows a
+    // fresh one after the next 45-day window.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    @Scheduled(fixedDelay = 24 * 60 * 60 * 1000, initialDelay = 180 * 1000)
+    @Transactional
+    public void remindMentorsOfOverdueReviews() {
+        OffsetDateTime cutoff = OffsetDateTime.now().minusDays(MENTOR_REVIEW_DEADLINE_DAYS);
+        List<Thesis> overdue = thesisRepository.findOverdueMentorReviews(cutoff);
+
+        if (overdue.isEmpty()) {
+            log.debug("[ScheduledTasks] No overdue mentor reviews");
+            return;
+        }
+
+        log.info("[ScheduledTasks] Found {} thesis/theses past the 45-day mentor review deadline",
+                overdue.size());
+
+        for (Thesis thesis : overdue) {
+            // Defensive re-checks — the query already filters on these, but a thesis's
+            // state could theoretically change between the query and this loop.
+            if (thesis.getStatus() != ThesisStatus.IN_PROGRESS) continue;
+            if (thesis.getLastVersionSubmittedAt() == null) continue;
+            User mentor = thesis.getMentor();
+            if (mentor == null) continue;
+
+            boolean alreadyNotifiedThisCycle = notificationRepository
+                    .existsByThesisAndUserAndTypeAndCreatedAtAfter(
+                            thesis, mentor,
+                            NotificationType.MENTOR_REVIEW_DEADLINE_EXCEEDED.name(),
+                            thesis.getLastVersionSubmittedAt());
+            if (alreadyNotifiedThisCycle) continue;
+
+            notificationService.notify(mentor, thesis, NotificationType.MENTOR_REVIEW_DEADLINE_EXCEEDED);
+            log.info("[ScheduledTasks] Mentor review deadline reminder sent for thesis {}", thesis.getId());
         }
     }
 

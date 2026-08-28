@@ -54,7 +54,7 @@ public class UserServiceImpl implements UserService {
                         .toList();
             }
             default -> throw new UnauthorizedException(
-                    "Listing users with role " + role + " is not permitted");
+                    "Прикажување на корисници со улога " + role + " не е дозволено.");
         }
     }
 
@@ -73,15 +73,15 @@ public class UserServiceImpl implements UserService {
         // self-service credit endpoint.
         User caller = securityUtils.getCurrentUser();
         if (caller.getRole() != Role.STUDENT_SERVICE) {
-            throw new UnauthorizedException("Only Student Service can update student credits");
+            throw new UnauthorizedException("Само Студентската служба може да ги менува кредитите на студентите.");
         }
 
         User target = userRepository.findById(userId)
-                .orElseThrow(() -> new ResourceNotFoundException("User not found with id: " + userId));
+                .orElseThrow(() -> new ResourceNotFoundException("Корисникот не е пронајден (id: " + userId + ")."));
 
         // Credits are a student-only concept.
         if (target.getRole() != Role.STUDENT) {
-            throw new BadRequestException("Credits can only be set for students");
+            throw new BadRequestException("Кредити можат да се поставуваат само за студенти.");
         }
 
         target.setCredits(request.getCredits());
@@ -97,7 +97,7 @@ public class UserServiceImpl implements UserService {
      */
     private void requireRole(User caller, Role required) {
         if (caller.getRole() != required) {
-            throw new UnauthorizedException("Requires role " + required);
+            throw new UnauthorizedException("Бара улога " + required);
         }
     }
 
@@ -111,6 +111,6 @@ public class UserServiceImpl implements UserService {
                 return;
             }
         }
-        throw new UnauthorizedException("Not permitted for role " + caller.getRole());
+        throw new UnauthorizedException("Не е дозволено за улога " + caller.getRole());
     }
 }
