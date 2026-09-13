@@ -838,7 +838,108 @@ praksa-frontend/                                  ← frontend repo
 
 ## CURRENT NEXT STEP
 
-**CURRENT NEXT STEP = SUBMITTED. DEVELOPMENT STOPPED PENDING PROFESSOR FEEDBACK.** The project has been finally committed and pushed to GitHub — see the dated "Final Git Commit + Push" entry directly below for the exact verification performed, the commit hash, and the push result. Do NOT start any new feature, refactor, or fix without explicit direction from the user; the next legitimate trigger for further work is feedback from the professor.
+**CURRENT NEXT STEP = SUBMITTED — MENTOR-PREP WORK COMMITTED AND PUSHED TO GITHUB (2026-09-13).** Both repositories have been finalized and pushed to `origin/main`: the frontend commit `108a39d` ("docs: finalize frontend documentation and gitignore") and the backend commit ("docs: finalize project documentation and repository cleanup") are live on GitHub. Backend suite 393/393 (0 failures) and `npm run build` EXIT 0 were both re-run and confirmed green immediately before committing. No application/business logic was changed; no secrets/`node_modules`/`target`/`dist` committed. **Development is STOPPED pending mentor feedback.** Do NOT start any new feature, refactor, or fix without explicit direction from the user; the next legitimate trigger is feedback from the mentor. See the dated "Final Commit + Push" entry directly below for the exact commit contents, verification, and hashes.
+
+**SINGLE BEST NEXT TASK:** None — the project is submitted. If/when the mentor responds, act on their specific feedback. Optionally, fill the remaining "Студент/Индекс/Ментор/Академска година" placeholders in the two READMEs and `docs/DOKUMENTACIJA.md` once the user supplies those details, then commit/push that one small doc change.
+
+---
+
+**Final Commit + Push (mentor-prep documentation + repo cleanup + test-isolation fix) — DONE (2026-09-13). 🏁 Frontend commit `108a39d` and the backend commit both pushed to `origin/main`. Backend suite 393/393 (0 failures); frontend `npm run build` EXIT 0 (1856 modules). No secrets, no `node_modules`/`target`/`dist`, no application logic changed. No destructive git commands; no force push.**
+
+**1. Scope.** The final commit-and-push of the accumulated mentor-preparation work (documentation, `.gitignore` hardening, and the previously-verified test-isolation fix) — explicitly NOT development. Read the ENTIRE `CLAUDE.md` first. No `git reset/clean/restore/stash`, no `--force`.
+
+**2. Pre-commit verification actually executed.** `git status`/`git diff --stat`/`git ls-files` on both repos; confirmed branch `main` and correct remotes (`github.com/BoshkoSmileski/praksa[-frontend].git`), in sync with origin before committing. Confirmed all 9 backend model modules present (`User`, `Thesis`, `ThesisVersion`, `ThesisComment`, `CommitteeMember`, `Defense`, `DefenseResult`, `Notification`, `ThesisStatusHistory`) + Auth (15 files); the ONLY non-doc/non-gitignore change is the expected `DefenseRequestIntegrationTest.java` test-isolation fix (no unexpected source change). Security: zero tracked `node_modules`/`target`/`dist`/`.env`/`application-local.properties` in either repo; no secret values in the committed diff (`application.properties` stays `${ENV}`-backed; only the intentional public demo password `password123` exists). Backend `mvnw -o test` (JBR JDK 25, live local Postgres) → **393 tests, 0 failures, 0 errors, BUILD SUCCESS**; frontend `npm run build` → **EXIT 0, 1856 modules**.
+
+**3. What was committed.**
+- **Frontend `praksa-frontend`** — commit **`108a39d`** ("docs: finalize frontend documentation and gitignore"): `README.md` (Macedonian rewrite + ФЕИТ/УКИМ author section), `.gitignore` (+`.env`/`.env.*`/`!.env.example`, +`Thumbs.db`). 2 files, +59/−45. Pushed: `98783d6..108a39d main -> main`.
+- **Backend `praksa`** — commit ("docs: finalize project documentation and repository cleanup"): `README.md` (Macedonian rewrite, 17 sections + ФЕИТ/УКИМ + "Детална документација" section), `docs/DOKUMENTACIJA.md` (NEW — detailed Macedonian documentation, 44 sections), `.gitignore` (+OS-files block `.DS_Store`/`Thumbs.db`), `src/test/java/com/praksa/integration/DefenseRequestIntegrationTest.java` (test-isolation fix — run-unique room names; assertions unchanged), and `CLAUDE.md` (this entry). Backend commit hash reported in this session's chat summary (a commit does not self-reference its own hash — established convention in the prior "Final Git Commit + Push" entry).
+
+**4. What was preserved.** Local `node_modules/` on disk (never touched); `package.json`/`package-lock.json`; all frontend `src` (55 files) and backend Java/Maven sources; every backend module listed above. No file deleted from tracking; no dependency changed.
+
+**5. Final git status.** Both repos: branch `main`, working tree clean, up to date with `origin/main` after push.
+
+**6. Recommended next task.** None — submitted; await mentor feedback. Only remaining optional doc touch-up: fill the author placeholders when the user provides them.
+
+**7. Honesty notes.** ACTUALLY EXECUTED: the full 393-test backend suite and `npm run build` (both green) immediately before committing; the real `git add`/`git commit`/`git push` for both repos; post-push `git status` confirming clean/synced. Frontend push output: `98783d6..108a39d main -> main`. Backend push output reported in chat.
+
+---
+
+**node_modules Git-tracking audit + frontend `.env` ignore rules — DONE (2026-09-13). 🏁 node_modules was NEVER tracked in either repo (nothing to remove); local node_modules preserved; added explicit `.env` ignore rules to the frontend `.gitignore`. Nothing committed or pushed.**
+
+**1. Scope.** A focused Git-hygiene task: ensure `node_modules` is not tracked and is protected by `.gitignore`. Read the ENTIRE `CLAUDE.md` first. No destructive git commands; no source code, no backend/frontend module, no `package.json`/`package-lock.json`, no dependency, and no business logic touched.
+
+**2. What was checked.** Both repos (`praksa` backend, `praksa-frontend` frontend): `git status`, `git ls-files`, `git ls-files | grep -i node_modules`, local `node_modules` existence, `git check-ignore`, and `.gitignore` contents.
+- **Backend `praksa`:** `node_modules` tracked = **0**; no local `node_modules` (it's a Java/Maven project). No `dist`/`.env`/`.idea`/`.vscode` tracked. Nothing to do.
+- **Frontend `praksa-frontend`:** `node_modules` tracked = **0** — **never tracked**. Local `node_modules` **exists** (11,663 entries) and is fully **ignored** (`git check-ignore node_modules` → ignored via the existing `node_modules` line in `.gitignore`). No `dist`/`.env`/IDE files tracked either.
+
+**3. What was removed from Git tracking.** **NOTHING.** `node_modules` was never tracked in either repo, so no `git rm -r --cached` was needed or run. Per the task ("if node_modules was never tracked, do not change anything unnecessarily"), no untracking was performed.
+
+**4. `.gitignore` change (the ONLY change this task made).** Frontend `praksa-frontend/.gitignore` already had `node_modules`, `dist`, `dist-ssr`, `*.local`, logs, and IDE rules. Added an explicit environment/secrets block (the one gap vs. the task's requested rules — a plain `.env` was NOT previously ignored, only `.env.local` via `*.local`):
+```
+# Environment / secrets
+.env
+.env.*
+!.env.example
+```
+All existing rules preserved. Verified effective: `git check-ignore .env .env.production` → both ignored. Backend `.gitignore` not touched (no node_modules/.env concern there; already hardened in the prior entry).
+
+**5. What was intentionally preserved.** Local `node_modules/` directory (still on disk, untouched — no `npm uninstall`, no dependency change); `package.json` + `package-lock.json` (both tracked); all 55 frontend `src` files (incl. `main.tsx`, `App.tsx`, `store/authStore.ts`); all backend entity modules — `Thesis`, `ThesisVersion`, `ThesisComment`, `CommitteeMember`, `Defense`, `DefenseResult`, `Notification`, `ThesisStatusHistory`, `User` — plus Auth (4 files); all Maven/Java sources and config.
+
+**6. Current Git status (nothing committed/pushed).**
+- Backend `praksa` (`main`, in sync with origin): `M .gitignore`, `M CLAUDE.md`, `M README.md`, `M src/test/java/com/praksa/integration/DefenseRequestIntegrationTest.java`, `?? docs/` — all from the prior mentor-prep entries, unchanged by this task except this `CLAUDE.md` entry.
+- Frontend `praksa-frontend` (`main`, in sync with origin): `M .gitignore` (the `.env` block added this task + the prior `Thumbs.db` line), `M README.md` (prior task).
+
+**7. Next recommended task.** Commit & push the accumulated mentor-prep work once the user gives the go-ahead (backend: `README.md`, `.gitignore`, `docs/DOKUMENTACIJA.md`, the test-isolation fix, `CLAUDE.md`; frontend: `README.md`, `.gitignore`). Optionally fill the remaining author placeholders (Студент/Индекс/Ментор/Академска година) first. Do NOT start new feature work without direction.
+
+---
+
+**Final Mentor-Prep Review (author info, docs QA, security, test-isolation fix) — DONE (2026-09-13). 🏁 Backend suite now 393/393 (0 failures — the "Shared Hall" test was fixed by test isolation, NOT by touching business logic); frontend `npm run build` EXIT 0 (1856 modules); no tracked secrets; NOTHING committed or pushed.**
+
+**1. Scope.** A final quality/preparation pass before the user commits & pushes for mentor review — explicitly NOT feature development. Read the ENTIRE `CLAUDE.md` start-to-finish first (all 2995 lines). No destructive git commands. The only source-code change is a TEST file (isolation fix, §4); no production/DTO/entity/service/security/config code was touched.
+
+**2. Repo state at start.** Both repos held the still-uncommitted mentor-review packaging from the prior 2026-09-13 session (backend: `M .gitignore`, `M CLAUDE.md`, `M README.md`, `?? docs/`; frontend: `M .gitignore`, `M README.md`) — all preserved and built upon, nothing reset/restored/stashed.
+
+**3. Author / project info (PART 1).** Filled the known institution details the user supplied — **Факултет за електротехника и информациски технологии (ФЕИТ)** and **Универзитет „Св. Кирил и Методиј“ во Скопје (УКИМ)** — into the "Автор / дипломски проект" sections of both READMEs and the documentation's title section. Replaced the developer-style `_(се пополнува)_` placeholders with clean, professional blank lines (`Студент: ____`, `Индекс: ____`, `Ментор: ____`, `Академска година: ____`). Per instruction, did NOT invent the student name, index, mentor name, or academic year.
+
+**4. The "Shared Hall" test failure — INVESTIGATED and FIXED by test isolation (PART 6).** Root cause confirmed by reading `DefenseRequestIntegrationTest` + `AbstractWorkflowIntegrationTest`: the base class is `@Transactional` (each test rolls back), so the failure was NOT from test rows — the final assertion queried `defenseRepository.findByRoomAndIsCancelledFalse("Shared Hall")` **globally**, counting a leftover COMMITTED `Defense` row in room "Shared Hall" left in the shared local dev DB by earlier manual/live HTTP testing (outside any test transaction) → `expected 1 but was 2`. **Fix (deterministic test fixture, the PART-6-preferred approach):** the double-booking test (`doubleBooking_secondApprovalRejected_realStack`) and its sibling `cancelThenRebook_realStack` now use a **run-unique room name** (`"Shared Hall " + UUID.randomUUID()` / `"Room 1 " + UUID.randomUUID()`), so the global room-count assertion is isolated from any pre-existing committed data. The double-booking rule is STILL genuinely verified (both theses propose the SAME unique room/time; approving A occupies it; approving B is rejected as a conflict; exactly one Defense in that room — the `assertEquals(1, …)` assertions are UNCHANGED, never weakened). NOT done: weakening/deleting/disabling the test, changing the expected value, touching `DefenseServiceImpl`/room-booking logic, or clearing the DB row (a fix that would regress on the next manual test). Only the two test methods' room strings changed — verified by `git diff`.
+
+**5. Verification actually executed.** Backend: `mvnw -o test` (JBR JDK 25, live local Postgres) → **Tests run: 393, Failures: 0, Errors: 0, Skipped: 0, BUILD SUCCESS** (the previously-failing `DefenseRequestIntegrationTest` now 6/6). Frontend: `npm run build` (`tsc -b && vite build`) → **EXIT 0, 1856 modules**. (The "SMTP down" lines in the backend log are deliberately-simulated conditions in the email/retry tests, not failures.)
+
+**6. Security re-scan (PART 4).** `git grep` over ALL tracked files in BOTH repos for password/secret/api-key/token/private-key/`jdbc://user:pass@` patterns → every hit is benign: env-var NAMES in docs (`JWT_SECRET`), variable/field names (`token`, `password` form bindings), a DB column name (`password_hash`), the `js-tokens` npm package, or the localized error string. NO real secret values. `application.properties` remains 100% `${ENV}`-backed; `application-local.properties` stays git-ignored/untracked; `application-local.properties.example` uses only `CHANGE_ME_*`. The only literal credential anywhere is the intentional public demo password `password123` (seeded demo accounts).
+
+**7. Git cleanliness (PART 5).** `git ls-files` in both repos → ZERO tracked `node_modules/`, `target/`, `dist/`, `build/`, `.idea/`, `.vscode/`, `.env`, `*.log`, `*.class`, `*.jar`, `.DS_Store`, `Thumbs.db`, `*.iml`, `application-local.properties`, or DB dumps. All required files tracked (backend `pom.xml`/`mvnw`/`mvnw.cmd`/`.gitignore`/`README.md`/`application.properties`/`.example`; frontend `package.json`/`package-lock.json`/`.gitignore`/`README.md`/`vite.config.ts`/`tsconfig.json`). `docs/DOKUMENTACIJA.md` is (correctly) still untracked pending commit.
+
+**8. Documentation consistency (PART 9 / PART 3).** Re-grepped the (now author-edited) docs against current source: 5 roles / **no ADMIN**, **21** statuses incl. `DEFENSE_FAILED`, mentor cap **15**, **200** credits, grade 5 → `DEFENSE_FAILED` (not archived), committee **3-or-4** + external non-voting, **5–15**-day window, **14**-day minimum, **15**-day extension cap, **45**-day mentor reminder, **30** notification types, **5** scheduled jobs — all present and correct; no obsolete "10"/"exactly 3"/"grade-5-archives"/old-scheduling-endpoint references. Both READMEs cross-link the two GitHub repos; the backend README has a dedicated "Детална документација" section pointing at `docs/DOKUMENTACIJA.md` (relative link).
+
+**9. Exact files changed this pass.** Backend: `README.md` (author/institution + "Детална документација" section), `docs/DOKUMENTACIJA.md` (author/institution on the title section), `src/test/java/com/praksa/integration/DefenseRequestIntegrationTest.java` (test-isolation fix, 2 methods), `CLAUDE.md` (this entry + CURRENT NEXT STEP/SINGLE BEST NEXT TASK). Frontend: `README.md` (author/institution). `.gitignore` files were already hardened in the prior session (unchanged this pass). **No** production source/DTO/entity/security/config file touched; **no** files removed from git tracking.
+
+**10. Remaining known issue.** None outstanding for submission. The former "Shared Hall" environmental failure is resolved (test now reproducible on any DB state). Documented design limitations (SMTP needs real creds; single-instance scheduled jobs / no ShedLock; HMAC JWT not RS256/JWKS; `ddl-auto=update` not Flyway) remain honestly documented in README §16 and DOKUMENTACIJA §42.
+
+**11. Status: READY TO COMMIT/PUSH pending user go-ahead.** Repo is clean, docs accurate, security clean, both builds green (393/393 + EXIT 0). The user explicitly asked NOT to commit or push yet.
+
+---
+
+**Mentor-Review Packaging (README + Documentation + repo cleanup) — DONE (2026-09-13). 🏁 Docs written and verified against current source; backend suite 393 tests / 392 pass (the SAME 1 pre-existing "Shared Hall" environmental failure); frontend `npm run build` EXIT 0. NOTHING committed or pushed — stopped for user review per explicit instruction.**
+
+**1. Scope.** Preparation of the repository for submission to the diploma-thesis mentor — NOT a feature/refactor task. Read the ENTIRE `CLAUDE.md` first (§1–14 reference + all dated entries). Goal: professional `README.md`, a separate detailed documentation document, a clean repo, correct `.gitignore`, without breaking anything. No destructive git commands used; no application logic touched.
+
+**2. Repo state at start.** Backend `praksa` (`origin/main`, HEAD `8702ca5`) and frontend `praksa-frontend` (`origin/main`, HEAD `98783d6`) were BOTH clean and in sync with origin — no uncommitted work to preserve. Audit confirmed the repos were ALREADY clean of junk: `git ls-files` found **zero** tracked `node_modules/`, `target/`, `dist/`, `.idea/`, `.vscode/`, `.env`, `*.log`, `*.class`, `*.jar`, or `application-local.properties`. Both `.gitignore` files were already comprehensive; ignored dirs (`target/`, `uploads/`, `.idea/`, `application-local.properties`, `node_modules/`, `dist/`) verified via `git status --ignored`. Tracked `application.properties` is 100% env-var-backed (no inline secret defaults); a repo-wide secret grep found nothing; `application-local.properties.example` uses only `CHANGE_ME_*` placeholders. **So no files needed to be removed from tracking** — the cleanup was verification + doc authoring + minor `.gitignore` hardening.
+
+**3. Source facts re-verified against CURRENT code (NOT trusted from stale §1–14).** Direct reads confirmed the code matches the NEWER dated entries, not the 2026-08-16 §1–14 snapshot. Authoritative current facts used in the docs: `Role` = 5 (STUDENT, MENTOR, STUDENT_SERVICE, COMMITTEE, ARCHIVE — **no ADMIN**); `ThesisStatus` = **21** incl. `DEFENSE_FAILED`; mentor cap **15** (`activeMentorCount >= 15`); `REQUIRED_CREDITS_FOR_THESIS = 200`; grades 5–10, **grade 5 → `DEFENSE_FAILED`** (not archived, reapply allowed), 6–10 → `ARCHIVED` (`DT-YYYY-NNNN`); committee **3-or-4 members** + external non-voting seat; defense request window **5–15 days** + **14-day** min since application; deadline extension ≤ **15 days**; mentor-review reminder **45 days**; `NotificationType` = **30**; **5** `@Scheduled` jobs; 11 entities; 8 controllers (ThesisController has 21 endpoints); `User.credits` present; PDF via OpenHTMLtoPDF with bundled Noto Sans Cyrillic; CORS allow-list; UI fully Macedonian. ⚠️ NOTE FOR FUTURE READERS: **§1–14 at the top of this file is a 2026-08-16 snapshot and is STALE on several of these points** (it still says 20 statuses, mentor limit 10, "exactly 3" committee, and that recordResult always archives). Trust the code and this entry over §1–14; §1–14 was intentionally left unmodified as dated history.
+
+**4. Deliverables created.**
+- `README.md` (backend root) — REWRITTEN in Macedonian, 17 sections (опис, функционалности, улоги, тек, архитектура, безбедност, база, API, известувања, PDF, scheduled, тестирање, инсталација, конфигурација, структура, ограничувања, автор). Replaced the OLD English README that wrongly listed an `ADMIN` role / `admin@test.com` and told users to hard-code the DB password.
+- `docs/DOKUMENTACIJA.md` (NEW) — detailed Macedonian documentation, all 44 requested sections, technically accurate, describes only implemented features; explicitly scopes physical/ceremonial faculty procedures as out-of-scope.
+- `praksa-frontend/README.md` — REWRITTEN in Macedonian, frontend-focused; fixed the same `ADMIN`→STUDENT_SERVICE role inaccuracy; points to the backend docs.
+- `.gitignore` (both repos) — added a small OS-files block (`.DS_Store`, `Thumbs.db`) — the only gap; nothing important is newly hidden.
+
+**5. Verification actually executed.** Backend: `mvnw.cmd -o test` (JBR JDK 25, live local Postgres) → **Tests run: 393, Failures: 1, Errors: 0** — the single failure is the long-documented `DefenseRequestIntegrationTest.doubleBooking_secondApprovalRejected_realStack` (`expected: <1> but was: <2>`), the SAME pre-existing environmental issue (stale non-cancelled `Defense` row in room "Shared Hall" in the local dev DB). NOT a regression (no app code changed), NOT "fixed" by touching defense logic, reported honestly in both README §12 and DOKUMENTACIJA §39. The "SMTP down" ERROR log lines are deliberately-simulated test conditions. Frontend: `npm run build` (`tsc -b && vite build`) → **EXIT 0**. Reverse-audited the new docs via grep — no false `ADMIN`-role claim, no "10"/"exactly 3"/"grade-5-archives" contradictions.
+
+**6. Exact files changed (all uncommitted, for user review).** Backend: `README.md` (rewrite), `.gitignore` (+OS block), `docs/DOKUMENTACIJA.md` (new), `CLAUDE.md` (this entry + CURRENT NEXT STEP/SINGLE BEST NEXT TASK). Frontend: `README.md` (rewrite), `.gitignore` (+`Thumbs.db`). **No** source/DTO/entity/security/config/test file touched. **No** files removed from git tracking (none needed removal).
+
+**7. Remaining known issue.** Only the pre-existing "Shared Hall" environmental test failure (clears on a fresh dev DB). No secrets tracked; no junk tracked; both builds green otherwise.
+
+**8. Status: READY TO PUSH pending user go-ahead.** Repo is clean and mentor-ready; the user explicitly asked NOT to commit or push yet and to receive a final report first.
 
 ---
 

@@ -105,9 +105,15 @@ class DefenseRequestIntegrationTest extends AbstractWorkflowIntegrationTest {
         UUID thesisA = advanceToReadyForProposal(a);
         UUID thesisB = advanceToReadyForProposal(b);
 
+        // Use a run-unique room name so the global "how many non-cancelled defenses are in this
+        // room" assertion below is isolated from any pre-existing committed Defense rows left in
+        // the shared local dev database by earlier manual/live HTTP testing (which are outside
+        // this @Transactional test's own rollback). The double-booking rule is still genuinely
+        // exercised: both theses propose the SAME room/time, so the conflict must still be caught.
+        String room = "Shared Hall " + UUID.randomUUID();
         OffsetDateTime when = OffsetDateTime.now().plusDays(10);
-        requestDefense(a.student, thesisA, "Shared Hall", when);
-        requestDefense(b.student, thesisB, "Shared Hall", when);
+        requestDefense(a.student, thesisA, room, when);
+        requestDefense(b.student, thesisB, room, when);
 
         // Both PENDING requests legitimately coexist — a PENDING request never reserves the room.
         assertEquals(DefenseRequestStatus.PENDING,
@@ -132,8 +138,8 @@ class DefenseRequestIntegrationTest extends AbstractWorkflowIntegrationTest {
         assertNotNull(requestB.getReason());
         assertEquals(1, notificationCount(b.student, NotificationType.DEFENSE_REQUEST_REJECTED, thesisB));
 
-        // Exactly one real Defense exists in "Shared Hall" across both theses.
-        long defensesInRoom = defenseRepository.findByRoomAndIsCancelledFalse("Shared Hall").size();
+        // Exactly one real Defense exists in the (run-unique) shared room across both theses.
+        long defensesInRoom = defenseRepository.findByRoomAndIsCancelledFalse(room).size();
         assertEquals(1, defensesInRoom);
     }
 
@@ -143,7 +149,11 @@ class DefenseRequestIntegrationTest extends AbstractWorkflowIntegrationTest {
         Actors a = newActors();
         UUID thesisId = advanceToReadyForProposal(a);
 
-        requestDefense(a.student, thesisId, "Room 1", OffsetDateTime.now().plusDays(7));
+        // Run-unique room name, isolating the global room-count assertion below from any
+        // pre-existing committed Defense rows in the shared local dev database (see the
+        // double-booking test for the rationale).
+        String room = "Room 1 " + UUID.randomUUID();
+        requestDefense(a.student, thesisId, room, OffsetDateTime.now().plusDays(7));
         approveDefenseRequest(a.service, thesisId);
         assertEquals(ThesisStatus.DEFENSE_SCHEDULED, reload(thesisId).getStatus());
 
@@ -154,15 +164,15 @@ class DefenseRequestIntegrationTest extends AbstractWorkflowIntegrationTest {
         assertEquals(ThesisStatus.DEFENSE_SCHEDULED, reload(thesisId).getStatus());
 
         // A brand-new proposal is now accepted (DEFENSE_SCHEDULED + no active Defense).
-        requestDefense(a.student, thesisId, "Room 1", OffsetDateTime.now().plusDays(8));
+        requestDefense(a.student, thesisId, room, OffsetDateTime.now().plusDays(8));
         approveDefenseRequest(a.service, thesisId);
 
         Defense secondDefense = defenseRepository.findByThesisAndIsCancelledFalse(reload(thesisId)).orElseThrow();
         assertTrue(!secondDefense.isCancelled());
 
-        // The cancelled first defense does not block "Room 1" for the new booking — only the
+        // The cancelled first defense does not block the room for the new booking — only the
         // NEW, non-cancelled one is counted.
-        assertEquals(1, defenseRepository.findByRoomAndIsCancelledFalse("Room 1").size());
+        assertEquals(1, defenseRepository.findByRoomAndIsCancelledFalse(room).size());
     }
 
     @Test
